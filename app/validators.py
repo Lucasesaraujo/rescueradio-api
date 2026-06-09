@@ -10,7 +10,10 @@ ALLOWED_MESSAGE_TYPES = {
 }
 
 
-def validate_incoming_message(data: dict) -> tuple[bool, dict | str]:
+def validate_incoming_message(data: object) -> tuple[bool, dict | str]:
+    if not isinstance(data, dict):
+        return False, "Payload deve ser um objeto JSON"
+
     try:
         message = IncomingMessage(**data)
     except ValidationError as error:
@@ -28,17 +31,19 @@ def validate_incoming_message(data: dict) -> tuple[bool, dict | str]:
 
 
 def validate_udp_datagram(
-    data: dict,
+    data: object,
 ) -> tuple[bool, tuple[str, dict] | str]:
+    if not isinstance(data, dict):
+        return False, "Datagrama deve ser um objeto JSON"
+
     try:
         datagram = UdpDatagram(**data)
-    except ValidationError as error:
+    except (TypeError, ValidationError) as error:
         return False, str(error)
 
-    message_data = datagram.model_dump(exclude={"channel_id"})
-    is_valid, result = validate_incoming_message(message_data)
-
-    if not is_valid:
-        return False, result
-
-    return True, (datagram.channel_id, result)
+    message_data = {
+        key: value
+        for key, value in data.items()
+        if key != "channel_id"
+    }
+    return True, (datagram.channel_id, message_data)

@@ -27,6 +27,10 @@ Quando o datagrama é válido, a API:
 
 Datagramas inválidos são registrados no log e descartados.
 
+A publicação usa uma fila limitada a 100 datagramas. Quando a fila está
+cheia, novos datagramas são descartados com aviso no log para impedir criação
+ilimitada de tarefas e consumo excessivo de memória.
+
 ## Teste manual no PowerShell
 
 ```powershell

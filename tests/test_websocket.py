@@ -107,3 +107,19 @@ def test_returns_error_for_invalid_payload():
 
             assert error["type"] == "ERROR"
             assert "inválido" in error["message"]
+
+
+def test_returns_error_for_non_object_payload():
+    app = create_app(udp_host="127.0.0.1", udp_port=0)
+
+    with TestClient(app) as client:
+        with client.websocket_connect(
+            "/ws/channel/canal-geral?usuario=Lucas"
+        ) as websocket:
+            receive_initial_events(websocket)
+            websocket.send_json([])
+
+            error = websocket.receive_json()
+
+            assert error["type"] == "ERROR"
+            assert error["message"] == "Payload deve ser um objeto JSON"

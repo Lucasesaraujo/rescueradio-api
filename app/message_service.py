@@ -15,7 +15,7 @@ class MessageService:
     async def publish(
         self,
         channel_id: str,
-        data: dict,
+        data: object,
     ) -> tuple[bool, dict | str]:
         is_valid, result = validate_incoming_message(data)
 

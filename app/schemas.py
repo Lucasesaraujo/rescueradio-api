@@ -8,5 +8,5 @@ class IncomingMessage(BaseModel):
     corpo_texto: str = Field(min_length=1, max_length=500)
 
 
-class UdpDatagram(IncomingMessage):
+class UdpDatagram(BaseModel):
     channel_id: str = Field(min_length=1, max_length=120)

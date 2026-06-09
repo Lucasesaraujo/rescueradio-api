@@ -28,11 +28,12 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         loop = asyncio.get_running_loop()
-        transport, _ = await loop.create_datagram_endpoint(
+        transport, protocol = await loop.create_datagram_endpoint(
             lambda: UdpMessageProtocol(message_service),
             local_addr=(configured_host, configured_port),
         )
         app.state.udp_transport = transport
+        app.state.udp_protocol = protocol
         app.state.udp_port = transport.get_extra_info("sockname")[1]
 
         try:
