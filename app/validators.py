@@ -2,7 +2,7 @@ from datetime import datetime
 
 from pydantic import ValidationError
 
-from app.schemas import IncomingMessage
+from app.schemas import IncomingMessage, UdpDatagram
 
 
 ALLOWED_MESSAGE_TYPES = {
@@ -10,7 +10,10 @@ ALLOWED_MESSAGE_TYPES = {
 }
 
 
-def validate_incoming_message(data: dict) -> tuple[bool, dict | str]:
+def validate_incoming_message(data: object) -> tuple[bool, dict | str]:
+    if not isinstance(data, dict):
+        return False, "Payload deve ser um objeto JSON"
+
     try:
         message = IncomingMessage(**data)
     except ValidationError as error:
@@ -25,3 +28,22 @@ def validate_incoming_message(data: dict) -> tuple[bool, dict | str]:
         return False, "timestamp_iso deve estar no formato ISO 8601"
 
     return True, message.model_dump()
+
+
+def validate_udp_datagram(
+    data: object,
+) -> tuple[bool, tuple[str, dict] | str]:
+    if not isinstance(data, dict):
+        return False, "Datagrama deve ser um objeto JSON"
+
+    try:
+        datagram = UdpDatagram(**data)
+    except (TypeError, ValidationError) as error:
+        return False, str(error)
+
+    message_data = {
+        key: value
+        for key, value in data.items()
+        if key != "channel_id"
+    }
+    return True, (datagram.channel_id, message_data)

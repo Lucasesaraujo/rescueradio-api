@@ -10,7 +10,8 @@ Backend de comunicacao do RescueRadio, implementado com Python e FastAPI.
 - buffer circular e briefing;
 - presenca de membros;
 - validacao do protocolo;
-- futuramente, transporte UDP, JWT, PostgreSQL, Redis e Kafka.
+- entrada de mensagens por UDP;
+- futuramente, JWT, PostgreSQL, Redis e Kafka.
 
 ## Desenvolvimento
 
@@ -47,12 +48,24 @@ docker build -t rescueradio-api:local .
 docker run --rm -p 8000:8000 -p 9000:9000/udp rescueradio-api:local
 ```
 
-A porta UDP `9000` esta reservada para a implementacao exigida nas proximas entregas. O transporte ainda nao esta implementado.
+A API recebe datagramas JSON em `9000/udp`. Mensagens válidas entram no
+buffer do canal e são retransmitidas aos clientes WebSocket. Nesta fase, o
+transporte UDP não envia ACK nem mantém presença.
 
 ## Documentacao
 
 - [Protocolo WebSocket](docs/protocol.md)
 - [Estado em memoria](docs/in-memory-state.md)
 - [Exemplos de mensagens](docs/sample-messages.md)
+- [Protocolo UDP](docs/udp.md)
 
 Para executar o ambiente completo, use o repositorio `rescueradio-infra`.
+
+## Fluxo de desenvolvimento
+
+- `main`: versões estáveis;
+- `develop`: integração das funcionalidades aprovadas;
+- `feature/*`: desenvolvimento isolado, sempre criado a partir de `develop`.
+
+As branches de funcionalidade devem voltar para `develop` por pull request
+após a aprovação do CI.

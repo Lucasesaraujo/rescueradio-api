@@ -1,21 +1,24 @@
-# Estado em Memória
+# Estado em memória
 
-Na Entrega 1, o RescueRadio mantém o estado principal em memória dentro da API FastAPI.
+O estado atual é dividido entre mensagens dos canais e conexões WebSocket.
 
-## Objetivo
+## Buffer de mensagens
 
-O estado em memória permite:
+`ChannelState` mantém um `deque(maxlen=50)` por canal. O buffer é usado para
+enviar o briefing quando um cliente WebSocket entra no canal.
 
-- controlar conexões WebSocket ativas por canal;
-- listar membros online;
-- armazenar as últimas mensagens para o briefing;
-- remover membros quando uma conexão é encerrada.
+```python
+message_buffer = {
+    "canal-geral": deque(maxlen=50)
+}
+```
 
-## Estruturas principais
+Mensagens recebidas por WebSocket e UDP passam pelo mesmo `MessageService` e
+são adicionadas ao buffer somente após validação.
 
-### `connections`
+## Conexões e presença
 
-Armazena as conexões WebSocket por canal e usuário.
+`WebSocketConnectionManager` mantém as conexões por canal e usuário:
 
 ```python
 connections = {
@@ -25,67 +28,15 @@ connections = {
 }
 ```
 
-Se o mesmo usuário conectar novamente ao mesmo canal, a conexão antiga é fechada e substituída pela nova.
-
-### `active_members`
-
-Armazena os membros online por canal.
-
-```python
-active_members = {
-    "canal-geral": {
-        "Lucas": {
-            "usuario": "Lucas",
-            "status": "online"
-        }
-    }
-}
-```
-
-Essa estrutura é usada para enviar a lista de membros nos eventos `MEMBER_JOINED` e `MEMBER_LEFT`.
-
-### `message_buffer`
-
-Armazena o histórico recente de mensagens por canal.
-
-```python
-message_buffer = {
-    "canal-geral": deque(maxlen=50)
-}
-```
-
-O tamanho definido para a Entrega 1 é `50` mensagens por canal.
-
-## Briefing
-
-Quando um usuário entra no canal, a API envia um evento `BRIEFING` contendo o conteúdo atual do `message_buffer`.
-
-Se ainda não houver mensagens, o briefing é enviado com a lista vazia:
-
-```json
-{
-  "type": "BRIEFING",
-  "channel_id": "canal-geral",
-  "messages": []
-}
-```
-
-## Desconexão
-
-Quando uma conexão WebSocket é encerrada, a API:
-
-1. remove o usuário de `connections`;
-2. remove o usuário de `active_members`;
-3. envia um evento `MEMBER_LEFT` para os membros restantes do canal.
-
-Durante o broadcast, a API também remove conexões que falham ao receber mensagens.
+A lista de membros ativos é derivada dessas conexões. Remetentes UDP não são
+registrados como membros porque não mantêm uma sessão com a API.
 
 ## Limitações
 
-Como o estado está em memória:
-
 - os dados são perdidos ao reiniciar a API;
 - não há histórico persistente;
-- não há compartilhamento de estado entre múltiplas instâncias da API.
+- múltiplas instâncias ainda não compartilham estado;
+- conexões e buffers são locais ao processo.
 
-Persistência e estado distribuído ficam planejados para entregas futuras com PostgreSQL, Redis e Kafka.
+Persistência e estado distribuído aguardam a especificação de PostgreSQL,
+Redis ou Kafka.
