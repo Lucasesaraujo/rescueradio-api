@@ -6,3 +6,7 @@ class IncomingMessage(BaseModel):
     usuario: str = Field(min_length=1, max_length=80)
     timestamp_iso: str
     corpo_texto: str = Field(min_length=1, max_length=500)
+
+
+class UdpDatagram(IncomingMessage):
+    channel_id: str = Field(min_length=1, max_length=120)

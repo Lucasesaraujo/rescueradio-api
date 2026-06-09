@@ -1,4 +1,4 @@
-from app.validators import validate_incoming_message
+from app.validators import validate_incoming_message, validate_udp_datagram
 
 
 def valid_message() -> dict:
@@ -35,3 +35,15 @@ def test_rejects_invalid_timestamp():
 
     assert is_valid is False
     assert result == "timestamp_iso deve estar no formato ISO 8601"
+
+
+def test_accepts_udp_datagram_with_channel():
+    message = valid_message()
+    message["channel_id"] = "canal-geral"
+
+    is_valid, result = validate_udp_datagram(message)
+
+    assert is_valid is True
+    channel_id, validated_message = result
+    assert channel_id == "canal-geral"
+    assert "channel_id" not in validated_message

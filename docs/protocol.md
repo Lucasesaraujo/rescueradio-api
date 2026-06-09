@@ -1,6 +1,7 @@
 # Protocolo de Comunicação
 
-Este documento registra o protocolo atual de comunicação WebSocket do RescueRadio.
+Este documento registra o protocolo WebSocket do RescueRadio. Para entrada de
+mensagens por datagramas, consulte [Protocolo UDP](udp.md).
 
 ## Endpoint
 
