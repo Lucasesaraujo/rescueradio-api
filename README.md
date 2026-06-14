@@ -136,9 +136,10 @@ Para executar o ambiente completo, use o repositorio `rescueradio-infra`.
 
 ## Fluxo de desenvolvimento
 
-- `main`: versões estáveis;
-- `develop`: integração das funcionalidades aprovadas;
+- `main`: homologação das versões aprovadas em `develop`;
+- `develop`: desenvolvimento e integração das funcionalidades aprovadas;
 - `feature/*`: desenvolvimento isolado, sempre criado a partir de `develop`.
 
 As branches de funcionalidade devem voltar para `develop` por pull request
-após a aprovação do CI.
+após a aprovação do CI. A promoção para homologação ocorre por pull request
+de `develop` para `main`.
