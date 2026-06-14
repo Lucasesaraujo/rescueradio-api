@@ -17,6 +17,26 @@ def test_accepts_valid_message():
     assert result["type"] == "SEND_MESSAGE"
 
 
+def test_trims_message_user():
+    message = valid_message()
+    message["usuario"] = "  Lucas  "
+
+    is_valid, result = validate_incoming_message(message)
+
+    assert is_valid is True
+    assert result["usuario"] == "Lucas"
+
+
+def test_rejects_blank_message_user():
+    message = valid_message()
+    message["usuario"] = "   "
+
+    is_valid, result = validate_incoming_message(message)
+
+    assert is_valid is False
+    assert "usuario" in result
+
+
 def test_rejects_unknown_message_type():
     message = valid_message()
     message["type"] = "UNKNOWN"

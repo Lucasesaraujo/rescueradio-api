@@ -13,6 +13,79 @@ Backend de comunicacao do RescueRadio, implementado com Python e FastAPI.
 - entrada de mensagens por UDP;
 - futuramente, JWT, PostgreSQL, Redis e Kafka.
 
+## Decisao tecnologica
+
+A API utiliza Python 3.12 com FastAPI, Uvicorn e Pydantic. O FastAPI foi
+escolhido porque oferece suporte nativo a operacoes assincronas e WebSocket,
+adequadas para manter varias conexoes simultaneas e transmitir eventos em
+tempo real. O Pydantic centraliza a tipagem e a validacao dos payloads, enquanto
+o modelo assincrono do Python permite integrar a escuta UDP ao mesmo servico
+sem recorrer a sockets TCP puros.
+
+Na arquitetura do RescueRadio, esta API recebe conexoes HTTP e WebSocket
+encaminhadas pelo Kong, mantem o estado temporario dos canais em memoria e
+tambem recebe datagramas UDP na porta `9000`. Mensagens validas vindas de ambos
+os transportes passam pelo mesmo servico de publicacao antes de entrar no
+historico e serem retransmitidas aos clientes.
+
+## Estado em memoria e briefing
+
+Cada canal possui um buffer circular implementado com `deque(maxlen=50)`.
+Portanto, sao mantidas somente as ultimas 50 mensagens validas de cada canal.
+Quando um socorrista estabelece uma nova conexao WebSocket, o servidor envia
+esse historico no evento `BRIEFING`.
+
+As conexoes ativas sao organizadas por canal e usuario. A entrada de uma
+conexao gera o evento `MEMBER_JOINED`, e a desconexao gera `MEMBER_LEFT`, ambos
+com a lista atualizada de membros online.
+
+## Protocolo WebSocket
+
+O cliente envia mensagens JSON com o seguinte contrato:
+
+```json
+{
+  "type": "SEND_MESSAGE",
+  "usuario": "Lucas",
+  "timestamp_iso": "2026-06-04T21:30:00Z",
+  "corpo_texto": "Equipe Alfa chegou ao ponto de encontro."
+}
+```
+
+O modelo de dominio da mensagem e
+`{usuario, timestamp_iso, corpo_texto}`. O campo adicional
+`type: SEND_MESSAGE` identifica o comando dentro do protocolo.
+
+O nome do usuario deve conter de 1 a 80 caracteres uteis. Espacos externos
+sao removidos, e conexoes com nome vazio ou acima do limite sao rejeitadas com
+o codigo WebSocket `1008`. Frames que nao contenham JSON valido recebem
+`ERROR` sem encerrar a conexao.
+
+Eventos enviados pelo servidor:
+
+- `CONNECTED`: confirma a conexao;
+- `BRIEFING`: envia ate 50 mensagens anteriores do canal;
+- `MESSAGE_RECEIVED`: retransmite uma mensagem valida;
+- `MEMBER_JOINED`: informa a entrada de um socorrista;
+- `MEMBER_LEFT`: informa a saida de um socorrista;
+- `ERROR`: informa um payload invalido.
+
+O contrato completo e os exemplos de payload estao em
+[docs/protocol.md](docs/protocol.md).
+
+## Estrutura de pastas
+
+```text
+rescueradio-api/
+|-- app/                  # API, estado, validadores e transportes
+|-- docs/                 # protocolo e modelagem do estado
+|-- tests/                # testes de WebSocket, validacao e UDP
+|-- Dockerfile
+|-- requirements.txt      # dependencias de execucao
+|-- requirements-dev.txt  # dependencias de desenvolvimento e testes
+`-- README.md
+```
+
 ## Desenvolvimento
 
 Requisitos:
