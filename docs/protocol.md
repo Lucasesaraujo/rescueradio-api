@@ -16,7 +16,11 @@ Parâmetros:
 | Campo | Origem | Descrição |
 | --- | --- | --- |
 | `channel_id` | path | Identificador do canal. Na interface atual, o valor padrão é `canal-geral`. |
-| `usuario` | query | Nome do socorrista que está entrando no canal. |
+| `usuario` | query | Nome do socorrista, com 1 a 80 caracteres após remover espaços externos. |
+
+Conexões com `usuario` vazio, formado somente por espaços ou com mais de 80
+caracteres úteis são rejeitadas durante o handshake com o código WebSocket
+`1008`.
 
 ## Mensagem enviada pelo cliente
 
@@ -32,9 +36,13 @@ Parâmetros:
 Validações principais:
 
 - `type` deve ser `SEND_MESSAGE`;
-- `usuario` é obrigatório e deve ter até 80 caracteres;
+- `usuario` é obrigatório, tem seus espaços externos removidos e deve conter
+  de 1 a 80 caracteres;
 - `timestamp_iso` deve estar em formato ISO 8601;
 - `corpo_texto` é obrigatório e deve ter até 500 caracteres.
+
+Se um frame de texto não contiver JSON válido, o servidor envia `ERROR` e
+mantém a conexão aberta para que o cliente possa corrigir a mensagem.
 
 ## Eventos enviados pelo servidor
 
@@ -126,3 +134,6 @@ Indica que o payload enviado pelo cliente é inválido.
   "message": "Payload inválido"
 }
 ```
+
+Para JSON sintaticamente inválido, `message` recebe
+`Payload deve conter JSON válido`.

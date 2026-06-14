@@ -1,4 +1,6 @@
+import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from app.main import create_app
 
@@ -34,6 +36,36 @@ def test_connects_and_receives_empty_briefing():
                 "channel_id": "canal-geral",
                 "messages": [],
             }
+            assert joined["members"] == [
+                {"usuario": "Lucas", "status": "online"}
+            ]
+
+
+@pytest.mark.parametrize("usuario", ["", "   ", "a" * 81])
+def test_rejects_invalid_user_during_handshake(usuario):
+    app = create_app(udp_host="127.0.0.1", udp_port=0)
+
+    with TestClient(app) as client:
+        with pytest.raises(WebSocketDisconnect) as error:
+            with client.websocket_connect(
+                f"/ws/channel/canal-geral?usuario={usuario}"
+            ):
+                pass
+
+        assert error.value.code == 1008
+        assert app.state.connections.get_active_members("canal-geral") == []
+
+
+def test_trims_user_during_handshake():
+    app = create_app(udp_host="127.0.0.1", udp_port=0)
+
+    with TestClient(app) as client:
+        with client.websocket_connect(
+            "/ws/channel/canal-geral?usuario=%20Lucas%20"
+        ) as websocket:
+            connected, _, joined = receive_initial_events(websocket)
+
+            assert connected["usuario"] == "Lucas"
             assert joined["members"] == [
                 {"usuario": "Lucas", "status": "online"}
             ]
@@ -91,6 +123,32 @@ def test_includes_previous_messages_in_briefing():
             assert briefing["messages"] == [valid_message()]
 
 
+def test_briefing_keeps_only_last_50_messages():
+    app = create_app(udp_host="127.0.0.1", udp_port=0)
+
+    with TestClient(app) as client:
+        with client.websocket_connect(
+            "/ws/channel/canal-geral?usuario=Lucas"
+        ) as lucas:
+            receive_initial_events(lucas)
+
+            for index in range(51):
+                message = valid_message()
+                message["corpo_texto"] = f"Mensagem {index}"
+                lucas.send_json(message)
+                lucas.receive_json()
+
+        with client.websocket_connect(
+            "/ws/channel/canal-geral?usuario=Julia"
+        ) as julia:
+            julia.receive_json()
+            briefing = julia.receive_json()
+
+            assert len(briefing["messages"]) == 50
+            assert briefing["messages"][0]["corpo_texto"] == "Mensagem 1"
+            assert briefing["messages"][-1]["corpo_texto"] == "Mensagem 50"
+
+
 def test_returns_error_for_invalid_payload():
     app = create_app(udp_host="127.0.0.1", udp_port=0)
 
@@ -123,3 +181,27 @@ def test_returns_error_for_non_object_payload():
 
             assert error["type"] == "ERROR"
             assert error["message"] == "Payload deve ser um objeto JSON"
+
+
+def test_returns_error_for_malformed_json_and_keeps_connection():
+    app = create_app(udp_host="127.0.0.1", udp_port=0)
+
+    with TestClient(app) as client:
+        with client.websocket_connect(
+            "/ws/channel/canal-geral?usuario=Lucas"
+        ) as websocket:
+            receive_initial_events(websocket)
+            websocket.send_text("not-json")
+
+            error = websocket.receive_json()
+
+            assert error == {
+                "type": "ERROR",
+                "channel_id": "canal-geral",
+                "message": "Payload deve conter JSON válido",
+            }
+
+            websocket.send_json(valid_message())
+            received = websocket.receive_json()
+
+            assert received["type"] == "MESSAGE_RECEIVED"

@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -60,6 +61,15 @@ def create_app(
         channel_id: str,
         usuario: str = Query(...),
     ):
+        usuario = usuario.strip()
+
+        if not 1 <= len(usuario) <= 80:
+            await websocket.close(
+                code=1008,
+                reason="usuario deve ter entre 1 e 80 caracteres",
+            )
+            return
+
         await connections.connect(channel_id, usuario, websocket)
 
         await websocket.send_json({
@@ -84,7 +94,16 @@ def create_app(
 
         try:
             while True:
-                data = await websocket.receive_json()
+                try:
+                    data = await websocket.receive_json()
+                except json.JSONDecodeError:
+                    await websocket.send_json({
+                        "type": "ERROR",
+                        "channel_id": channel_id,
+                        "message": "Payload deve conter JSON válido",
+                    })
+                    continue
+
                 is_valid, result = await message_service.publish(
                     channel_id,
                     data,
