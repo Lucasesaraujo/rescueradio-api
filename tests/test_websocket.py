@@ -71,7 +71,7 @@ def test_trims_user_during_handshake():
             ]
 
 
-def test_broadcasts_messages_and_member_disconnect():
+def test_broadcasts_messages_to_other_members_and_member_disconnect():
     app = create_app(udp_host="127.0.0.1", udp_port=0)
 
     with TestClient(app) as client:
@@ -88,12 +88,28 @@ def test_broadcasts_messages_and_member_disconnect():
                 assert joined["type"] == "MEMBER_JOINED"
                 assert len(joined["members"]) == 2
 
-                lucas.send_json(valid_message())
-                lucas_message = lucas.receive_json()
-                marcelo_message = marcelo.receive_json()
+                with client.websocket_connect(
+                    "/ws/channel/canal-geral?usuario=Julia"
+                ) as julia:
+                    receive_initial_events(julia)
+                    julia_joined_for_lucas = lucas.receive_json()
+                    julia_joined_for_marcelo = marcelo.receive_json()
+                    assert julia_joined_for_lucas["type"] == "MEMBER_JOINED"
+                    assert julia_joined_for_marcelo["type"] == "MEMBER_JOINED"
+                    assert len(julia_joined_for_lucas["members"]) == 3
 
-                assert lucas_message["type"] == "MESSAGE_RECEIVED"
-                assert marcelo_message == lucas_message
+                    lucas.send_json(valid_message())
+                    marcelo_message = marcelo.receive_json()
+                    julia_message = julia.receive_json()
+
+                    assert marcelo_message["type"] == "MESSAGE_RECEIVED"
+                    assert marcelo_message["payload"] == valid_message()
+                    assert julia_message == marcelo_message
+
+                julia_left_for_lucas = lucas.receive_json()
+                julia_left_for_marcelo = marcelo.receive_json()
+                assert julia_left_for_lucas["type"] == "MEMBER_LEFT"
+                assert julia_left_for_marcelo["type"] == "MEMBER_LEFT"
 
             left = lucas.receive_json()
             assert left["type"] == "MEMBER_LEFT"
@@ -110,8 +126,14 @@ def test_includes_previous_messages_in_briefing():
             "/ws/channel/canal-geral?usuario=Lucas"
         ) as lucas:
             receive_initial_events(lucas)
-            lucas.send_json(valid_message())
-            lucas.receive_json()
+
+            with client.websocket_connect(
+                "/ws/channel/canal-geral?usuario=Marcelo"
+            ) as marcelo:
+                receive_initial_events(marcelo)
+                lucas.receive_json()
+                lucas.send_json(valid_message())
+                marcelo.receive_json()
 
         with client.websocket_connect(
             "/ws/channel/canal-geral?usuario=Julia"
@@ -132,11 +154,17 @@ def test_briefing_keeps_only_last_50_messages():
         ) as lucas:
             receive_initial_events(lucas)
 
-            for index in range(51):
-                message = valid_message()
-                message["corpo_texto"] = f"Mensagem {index}"
-                lucas.send_json(message)
+            with client.websocket_connect(
+                "/ws/channel/canal-geral?usuario=Marcelo"
+            ) as marcelo:
+                receive_initial_events(marcelo)
                 lucas.receive_json()
+
+                for index in range(51):
+                    message = valid_message()
+                    message["corpo_texto"] = f"Mensagem {index}"
+                    lucas.send_json(message)
+                    marcelo.receive_json()
 
         with client.websocket_connect(
             "/ws/channel/canal-geral?usuario=Julia"
@@ -189,11 +217,11 @@ def test_returns_error_for_malformed_json_and_keeps_connection():
     with TestClient(app) as client:
         with client.websocket_connect(
             "/ws/channel/canal-geral?usuario=Lucas"
-        ) as websocket:
-            receive_initial_events(websocket)
-            websocket.send_text("not-json")
+        ) as lucas:
+            receive_initial_events(lucas)
+            lucas.send_text("not-json")
 
-            error = websocket.receive_json()
+            error = lucas.receive_json()
 
             assert error == {
                 "type": "ERROR",
@@ -201,7 +229,12 @@ def test_returns_error_for_malformed_json_and_keeps_connection():
                 "message": "Payload deve conter JSON válido",
             }
 
-            websocket.send_json(valid_message())
-            received = websocket.receive_json()
+            with client.websocket_connect(
+                "/ws/channel/canal-geral?usuario=Marcelo"
+            ) as marcelo:
+                receive_initial_events(marcelo)
+                lucas.receive_json()
+                lucas.send_json(valid_message())
+                received = marcelo.receive_json()
 
-            assert received["type"] == "MESSAGE_RECEIVED"
+                assert received["type"] == "MESSAGE_RECEIVED"

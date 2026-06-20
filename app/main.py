@@ -9,7 +9,7 @@ from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 from app.message_service import MessageService
 from app.state import ChannelState
 from app.udp import UdpMessageProtocol
-from app.websocket_manager import WebSocketConnectionManager
+from app.websocket_manager import WebSocketConnectionManager, log_event
 
 
 def create_app(
@@ -64,6 +64,11 @@ def create_app(
         usuario = usuario.strip()
 
         if not 1 <= len(usuario) <= 80:
+            log_event(
+                "websocket_rejected",
+                channel_id=channel_id,
+                reason="invalid_usuario",
+            )
             await websocket.close(
                 code=1008,
                 reason="usuario deve ter entre 1 e 80 caracteres",
@@ -97,6 +102,11 @@ def create_app(
                 try:
                     data = await websocket.receive_json()
                 except json.JSONDecodeError:
+                    log_event(
+                        "websocket_malformed_json",
+                        channel_id=channel_id,
+                        usuario=usuario,
+                    )
                     await websocket.send_json({
                         "type": "ERROR",
                         "channel_id": channel_id,
@@ -107,9 +117,16 @@ def create_app(
                 is_valid, result = await message_service.publish(
                     channel_id,
                     data,
+                    exclude_usuario=usuario,
                 )
 
                 if not is_valid:
+                    log_event(
+                        "websocket_invalid_payload",
+                        channel_id=channel_id,
+                        usuario=usuario,
+                        reason=str(result),
+                    )
                     await websocket.send_json({
                         "type": "ERROR",
                         "channel_id": channel_id,

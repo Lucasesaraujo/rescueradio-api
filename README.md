@@ -7,6 +7,7 @@ Backend de comunicacao do RescueRadio, implementado com Python e FastAPI.
 - health check HTTP;
 - conexoes WebSocket por canal;
 - broadcast de mensagens;
+- cliente de terminal com reconexao automatica;
 - buffer circular e briefing;
 - presenca de membros;
 - validacao do protocolo;
@@ -73,11 +74,17 @@ Eventos enviados pelo servidor:
 O contrato completo e os exemplos de payload estao em
 [docs/protocol.md](docs/protocol.md).
 
+Mensagens `SEND_MESSAGE` recebidas por WebSocket sao enviadas para os outros
+socorristas conectados ao mesmo canal. O remetente nao recebe eco da propria
+mensagem. Eventos de sistema, como entrada e saida de membros, continuam sendo
+enviados para todos os membros conectados ao canal.
+
 ## Estrutura de pastas
 
 ```text
 rescueradio-api/
 |-- app/                  # API, estado, validadores e transportes
+|   `-- terminal_client.py # cliente WebSocket via terminal
 |-- docs/                 # protocolo e modelagem do estado
 |-- tests/                # testes de WebSocket, validacao e UDP
 |-- Dockerfile
@@ -107,6 +114,48 @@ O endpoint WebSocket e:
 ```text
 ws://localhost:8000/ws/channel/{channel_id}?usuario={usuario}
 ```
+
+## Cliente de terminal
+
+Este cliente existe para validar a Entrega 2 em um nivel mais baixo, via
+console, sem substituir a interface grafica do RescueRadio. A aplicacao Angular
+usa o mesmo endpoint e o mesmo protocolo WebSocket descritos aqui.
+
+Com a API em execucao, abra tres terminais de cliente e conecte tres
+socorristas ao mesmo canal:
+
+```bash
+python -m app.terminal_client --usuario Lucas
+```
+
+```bash
+python -m app.terminal_client --usuario Marcelo
+```
+
+```bash
+python -m app.terminal_client --usuario Julia
+```
+
+Digite uma mensagem em qualquer terminal e pressione Enter. Os outros dois
+terminais devem receber a mensagem imediatamente no formato:
+
+```text
+[canal-geral] Lucas: Equipe Alfa chegou ao local.
+```
+
+O terminal que enviou a mensagem nao recebe eco da propria mensagem. Para sair
+do cliente, digite `/sair`, `/exit` ou `/quit`.
+
+O cliente tenta reconectar automaticamente quando a conexao cai. Para testar
+via Kong no ambiente Docker Compose, informe a URL do gateway:
+
+```bash
+python -m app.terminal_client --url ws://localhost:8001 --usuario Lucas
+```
+
+O servidor emite logs estruturados no console para conexoes, desconexoes,
+mensagens recebidas, broadcasts, payloads invalidos e conexoes quebradas
+removidas.
 
 ## Testes
 
