@@ -33,7 +33,7 @@ async def wait_for_briefing(
     deadline = loop.time() + timeout
 
     while loop.time() < deadline:
-        briefing = app.state.channel_state.get_briefing(channel_id)
+        briefing = await app.state.message_repository.get_briefing(channel_id)
 
         if len(briefing) == expected_size:
             return briefing
@@ -46,7 +46,7 @@ async def wait_for_briefing(
 
 
 def test_forwards_udp_message_to_websocket_client():
-    app = create_app(udp_host="127.0.0.1", udp_port=0)
+    app = create_app(udp_host="127.0.0.1", udp_port=0, disconnect_grace_seconds=0)
 
     with TestClient(app) as client:
         with client.websocket_connect(
@@ -67,7 +67,7 @@ def test_forwards_udp_message_to_websocket_client():
 
 
 def test_discards_invalid_udp_datagram():
-    app = create_app(udp_host="127.0.0.1", udp_port=0)
+    app = create_app(udp_host="127.0.0.1", udp_port=0, disconnect_grace_seconds=0)
 
     with TestClient(app) as client:
         send_datagram(app.state.udp_port, b"not-json")
@@ -80,11 +80,16 @@ def test_discards_invalid_udp_datagram():
             json.dumps([]).encode("utf-8"),
         )
 
-        assert app.state.channel_state.get_briefing("canal-geral") == []
+        briefing = client.portal.call(
+            app.state.message_repository.get_briefing,
+            "canal-geral",
+        )
+
+        assert briefing == []
 
 
 def test_keeps_udp_messages_isolated_by_channel():
-    app = create_app(udp_host="127.0.0.1", udp_port=0)
+    app = create_app(udp_host="127.0.0.1", udp_port=0, disconnect_grace_seconds=0)
 
     with TestClient(app) as client:
         send_datagram(
@@ -98,13 +103,18 @@ def test_keeps_udp_messages_isolated_by_channel():
             1,
         )
 
-        assert app.state.channel_state.get_briefing("canal-geral") == []
+        canal_geral_briefing = client.portal.call(
+            app.state.message_repository.get_briefing,
+            "canal-geral",
+        )
+
+        assert canal_geral_briefing == []
         assert len(briefing) == 1
         assert briefing[0]["usuario"] == "Central"
 
 
 def test_drops_datagram_when_queue_is_full(caplog):
-    app = create_app(udp_host="127.0.0.1", udp_port=0)
+    app = create_app(udp_host="127.0.0.1", udp_port=0, disconnect_grace_seconds=0)
 
     with TestClient(app):
         protocol = app.state.udp_protocol

@@ -22,7 +22,7 @@ def valid_message(usuario: str = "Lucas") -> dict:
 
 
 def test_connects_and_receives_empty_briefing():
-    app = create_app(udp_host="127.0.0.1", udp_port=0)
+    app = create_app(udp_host="127.0.0.1", udp_port=0, disconnect_grace_seconds=0)
 
     with TestClient(app) as client:
         with client.websocket_connect(
@@ -43,7 +43,7 @@ def test_connects_and_receives_empty_briefing():
 
 @pytest.mark.parametrize("usuario", ["", "   ", "a" * 81])
 def test_rejects_invalid_user_during_handshake(usuario):
-    app = create_app(udp_host="127.0.0.1", udp_port=0)
+    app = create_app(udp_host="127.0.0.1", udp_port=0, disconnect_grace_seconds=0)
 
     with TestClient(app) as client:
         with pytest.raises(WebSocketDisconnect) as error:
@@ -57,7 +57,7 @@ def test_rejects_invalid_user_during_handshake(usuario):
 
 
 def test_trims_user_during_handshake():
-    app = create_app(udp_host="127.0.0.1", udp_port=0)
+    app = create_app(udp_host="127.0.0.1", udp_port=0, disconnect_grace_seconds=0)
 
     with TestClient(app) as client:
         with client.websocket_connect(
@@ -72,7 +72,7 @@ def test_trims_user_during_handshake():
 
 
 def test_broadcasts_messages_to_other_members_and_member_disconnect():
-    app = create_app(udp_host="127.0.0.1", udp_port=0)
+    app = create_app(udp_host="127.0.0.1", udp_port=0, disconnect_grace_seconds=0)
 
     with TestClient(app) as client:
         with client.websocket_connect(
@@ -118,8 +118,45 @@ def test_broadcasts_messages_to_other_members_and_member_disconnect():
             ]
 
 
+def test_quick_reconnect_cancels_member_left_event():
+    app = create_app(
+        udp_host="127.0.0.1",
+        udp_port=0,
+        disconnect_grace_seconds=0.2,
+    )
+
+    with TestClient(app) as client:
+        with client.websocket_connect(
+            "/ws/channel/canal-geral?usuario=Lucas"
+        ) as lucas:
+            receive_initial_events(lucas)
+
+            with client.websocket_connect(
+                "/ws/channel/canal-geral?usuario=Marcelo"
+            ) as marcelo:
+                receive_initial_events(marcelo)
+                lucas.receive_json()
+
+            with client.websocket_connect(
+                "/ws/channel/canal-geral?usuario=Marcelo"
+            ) as marcelo_reconnected:
+                connected, briefing, joined = receive_initial_events(
+                    marcelo_reconnected
+                )
+                joined_for_lucas = lucas.receive_json()
+
+                assert connected["usuario"] == "Marcelo"
+                assert briefing["type"] == "BRIEFING"
+                assert joined["type"] == "MEMBER_JOINED"
+                assert joined_for_lucas["type"] == "MEMBER_JOINED"
+                assert all(
+                    event["type"] != "MEMBER_LEFT"
+                    for event in [joined, joined_for_lucas]
+                )
+
+
 def test_includes_previous_messages_in_briefing():
-    app = create_app(udp_host="127.0.0.1", udp_port=0)
+    app = create_app(udp_host="127.0.0.1", udp_port=0, disconnect_grace_seconds=0)
 
     with TestClient(app) as client:
         with client.websocket_connect(
@@ -146,7 +183,7 @@ def test_includes_previous_messages_in_briefing():
 
 
 def test_briefing_keeps_only_last_50_messages():
-    app = create_app(udp_host="127.0.0.1", udp_port=0)
+    app = create_app(udp_host="127.0.0.1", udp_port=0, disconnect_grace_seconds=0)
 
     with TestClient(app) as client:
         with client.websocket_connect(
@@ -178,7 +215,7 @@ def test_briefing_keeps_only_last_50_messages():
 
 
 def test_returns_error_for_invalid_payload():
-    app = create_app(udp_host="127.0.0.1", udp_port=0)
+    app = create_app(udp_host="127.0.0.1", udp_port=0, disconnect_grace_seconds=0)
 
     with TestClient(app) as client:
         with client.websocket_connect(
@@ -196,7 +233,7 @@ def test_returns_error_for_invalid_payload():
 
 
 def test_returns_error_for_non_object_payload():
-    app = create_app(udp_host="127.0.0.1", udp_port=0)
+    app = create_app(udp_host="127.0.0.1", udp_port=0, disconnect_grace_seconds=0)
 
     with TestClient(app) as client:
         with client.websocket_connect(
@@ -212,7 +249,7 @@ def test_returns_error_for_non_object_payload():
 
 
 def test_returns_error_for_malformed_json_and_keeps_connection():
-    app = create_app(udp_host="127.0.0.1", udp_port=0)
+    app = create_app(udp_host="127.0.0.1", udp_port=0, disconnect_grace_seconds=0)
 
     with TestClient(app) as client:
         with client.websocket_connect(

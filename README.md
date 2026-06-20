@@ -8,37 +8,43 @@ Backend de comunicacao do RescueRadio, implementado com Python e FastAPI.
 - conexoes WebSocket por canal;
 - broadcast de mensagens;
 - cliente de terminal com reconexao automatica;
-- buffer circular e briefing;
-- presenca de membros;
+- persistencia de mensagens em PostgreSQL;
+- briefing com as ultimas mensagens persistidas;
+- presenca de membros em Redis;
 - validacao do protocolo;
 - entrada de mensagens por UDP;
-- futuramente, JWT, PostgreSQL, Redis e Kafka.
+- futuramente, JWT, Kafka e observabilidade.
 
-## Decisao tecnologica
+## Decisao Tecnologica
 
-A API utiliza Python 3.12 com FastAPI, Uvicorn e Pydantic. O FastAPI foi
-escolhido porque oferece suporte nativo a operacoes assincronas e WebSocket,
-adequadas para manter varias conexoes simultaneas e transmitir eventos em
-tempo real. O Pydantic centraliza a tipagem e a validacao dos payloads, enquanto
-o modelo assincrono do Python permite integrar a escuta UDP ao mesmo servico
-sem recorrer a sockets TCP puros.
+A API utiliza Python 3.12 com FastAPI, Uvicorn, Pydantic, PostgreSQL e Redis.
+O FastAPI foi escolhido porque oferece suporte nativo a operacoes assincronas e
+WebSocket, adequadas para manter varias conexoes simultaneas e transmitir
+eventos em tempo real. O Pydantic centraliza a tipagem e a validacao dos
+payloads, enquanto o modelo assincrono do Python permite integrar a escuta UDP,
+PostgreSQL e Redis ao mesmo servico sem recorrer a sockets TCP puros.
 
 Na arquitetura do RescueRadio, esta API recebe conexoes HTTP e WebSocket
-encaminhadas pelo Kong, mantem o estado temporario dos canais em memoria e
-tambem recebe datagramas UDP na porta `9000`. Mensagens validas vindas de ambos
-os transportes passam pelo mesmo servico de publicacao antes de entrar no
-historico e serem retransmitidas aos clientes.
+encaminhadas pelo Kong, persiste mensagens no PostgreSQL, mantem presenca
+temporaria no Redis e tambem recebe datagramas UDP na porta `9000`. Mensagens
+validas vindas de ambos os transportes passam pelo mesmo servico de publicacao
+antes de entrar no historico e serem retransmitidas aos clientes.
 
-## Estado em memoria e briefing
+## Persistencia, Presenca e Briefing
 
-Cada canal possui um buffer circular implementado com `deque(maxlen=50)`.
-Portanto, sao mantidas somente as ultimas 50 mensagens validas de cada canal.
-Quando um socorrista estabelece uma nova conexao WebSocket, o servidor envia
-esse historico no evento `BRIEFING`.
+As mensagens validas sao gravadas na tabela `channel_messages` do PostgreSQL.
+Quando um socorrista estabelece uma nova conexao WebSocket, o servidor consulta
+as ultimas 50 mensagens do canal e envia esse historico no evento `BRIEFING`.
 
-As conexoes ativas sao organizadas por canal e usuario. A entrada de uma
-conexao gera o evento `MEMBER_JOINED`, e a desconexao gera `MEMBER_LEFT`, ambos
-com a lista atualizada de membros online.
+A presenca dos socorristas online fica no Redis, separada por canal. A entrada
+de uma conexao gera o evento `MEMBER_JOINED`, e a desconexao gera `MEMBER_LEFT`,
+ambos com a lista atualizada de membros online. O gerenciador WebSocket continua
+mantendo apenas as conexoes locais usadas para broadcast.
+
+Para evitar que um refresh do navegador pareca uma saida real do socorrista, a
+API usa uma pequena tolerancia antes de emitir `MEMBER_LEFT`. Se o mesmo
+usuario reconectar ao mesmo canal dentro de `DISCONNECT_GRACE_SECONDS`, a saida
+pendente e cancelada.
 
 ## Protocolo WebSocket
 
@@ -53,14 +59,13 @@ O cliente envia mensagens JSON com o seguinte contrato:
 }
 ```
 
-O modelo de dominio da mensagem e
-`{usuario, timestamp_iso, corpo_texto}`. O campo adicional
-`type: SEND_MESSAGE` identifica o comando dentro do protocolo.
+O modelo de dominio da mensagem e `{usuario, timestamp_iso, corpo_texto}`. O
+campo adicional `type: SEND_MESSAGE` identifica o comando dentro do protocolo.
 
-O nome do usuario deve conter de 1 a 80 caracteres uteis. Espacos externos
-sao removidos, e conexoes com nome vazio ou acima do limite sao rejeitadas com
-o codigo WebSocket `1008`. Frames que nao contenham JSON valido recebem
-`ERROR` sem encerrar a conexao.
+O nome do usuario deve conter de 1 a 80 caracteres uteis. Espacos externos sao
+removidos, e conexoes com nome vazio ou acima do limite sao rejeitadas com o
+codigo WebSocket `1008`. Frames que nao contenham JSON valido recebem `ERROR`
+sem encerrar a conexao.
 
 Eventos enviados pelo servidor:
 
@@ -71,25 +76,25 @@ Eventos enviados pelo servidor:
 - `MEMBER_LEFT`: informa a saida de um socorrista;
 - `ERROR`: informa um payload invalido.
 
-O contrato completo e os exemplos de payload estao em
-[docs/protocol.md](docs/protocol.md).
-
 Mensagens `SEND_MESSAGE` recebidas por WebSocket sao enviadas para os outros
 socorristas conectados ao mesmo canal. O remetente nao recebe eco da propria
 mensagem. Eventos de sistema, como entrada e saida de membros, continuam sendo
 enviados para todos os membros conectados ao canal.
 
-## Estrutura de pastas
+## Estrutura de Pastas
 
 ```text
 rescueradio-api/
-|-- app/                  # API, estado, validadores e transportes
-|   `-- terminal_client.py # cliente WebSocket via terminal
-|-- docs/                 # protocolo e modelagem do estado
-|-- tests/                # testes de WebSocket, validacao e UDP
+|-- app/                   # API, estado, validadores e transportes
+|   |-- database.py         # schema SQLAlchemy
+|   |-- presence.py         # presenca em memoria ou Redis
+|   |-- state.py            # repositorios de mensagens
+|   `-- terminal_client.py  # cliente WebSocket via terminal
+|-- docs/                  # protocolo e modelagem do estado
+|-- tests/                 # testes de WebSocket, validacao, UDP e repositorios
 |-- Dockerfile
-|-- requirements.txt      # dependencias de execucao
-|-- requirements-dev.txt  # dependencias de desenvolvimento e testes
+|-- requirements.txt       # dependencias de execucao
+|-- requirements-dev.txt   # dependencias de desenvolvimento e testes
 `-- README.md
 ```
 
@@ -97,7 +102,8 @@ rescueradio-api/
 
 Requisitos:
 
-- Python 3.12.
+- Python 3.12;
+- PostgreSQL e Redis, quando `DATABASE_URL` e `REDIS_URL` estiverem definidos.
 
 Crie um ambiente virtual, instale as dependencias e execute a API:
 
@@ -107,6 +113,10 @@ python -m pip install -r requirements-dev.txt
 python -m uvicorn app.main:app --reload
 ```
 
+Sem `DATABASE_URL` e `REDIS_URL`, a API usa implementacoes em memoria para
+testes e desenvolvimento rapido. No Docker Compose, essas variaveis sao
+configuradas automaticamente e a API usa PostgreSQL e Redis reais.
+
 O health check fica disponivel em <http://localhost:8000/health>.
 
 O endpoint WebSocket e:
@@ -115,7 +125,7 @@ O endpoint WebSocket e:
 ws://localhost:8000/ws/channel/{channel_id}?usuario={usuario}
 ```
 
-## Cliente de terminal
+## Cliente de Terminal
 
 Este cliente existe para validar a Entrega 2 em um nivel mais baixo, via
 console, sem substituir a interface grafica do RescueRadio. A aplicacao Angular
@@ -165,30 +175,34 @@ python -m pytest
 
 ## Docker
 
+Para executar somente a API sem Postgres/Redis:
+
 ```bash
 docker build -t rescueradio-api:local .
 docker run --rm -p 8000:8000 -p 9000:9000/udp rescueradio-api:local
 ```
 
-A API recebe datagramas JSON em `9000/udp`. Mensagens válidas entram no
-buffer do canal e são retransmitidas aos clientes WebSocket. Nesta fase, o
-transporte UDP não envia ACK nem mantém presença.
+Para executar a arquitetura completa com PostgreSQL, Redis, Kong e frontend,
+use o repositorio `rescueradio-infra`.
+
+A API recebe datagramas JSON em `9000/udp`. Mensagens validas entram no
+PostgreSQL quando `DATABASE_URL` esta configurado e sao retransmitidas aos
+clientes WebSocket. Nesta fase, o transporte UDP nao envia ACK nem mantem
+presenca.
 
 ## Documentacao
 
 - [Protocolo WebSocket](docs/protocol.md)
-- [Estado em memoria](docs/in-memory-state.md)
+- [Persistencia e estado temporario](docs/in-memory-state.md)
 - [Exemplos de mensagens](docs/sample-messages.md)
 - [Protocolo UDP](docs/udp.md)
 
-Para executar o ambiente completo, use o repositorio `rescueradio-infra`.
+## Fluxo de Desenvolvimento
 
-## Fluxo de desenvolvimento
-
-- `main`: homologação das versões aprovadas em `develop`;
-- `develop`: desenvolvimento e integração das funcionalidades aprovadas;
+- `main`: homologacao das versoes aprovadas em `develop`;
+- `develop`: desenvolvimento e integracao das funcionalidades aprovadas;
 - `feature/*`: desenvolvimento isolado, sempre criado a partir de `develop`.
 
 As branches de funcionalidade devem voltar para `develop` por pull request
-após a aprovação do CI. A promoção para homologação ocorre por pull request
-de `develop` para `main`.
+apos a aprovacao do CI. A promocao para homologacao ocorre por pull request de
+`develop` para `main`.

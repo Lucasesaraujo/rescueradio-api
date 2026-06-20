@@ -1,16 +1,17 @@
-from app.state import ChannelState
+from app.state import MessageRepository
+from app.pubsub import PubSubService
 from app.validators import validate_incoming_message
-from app.websocket_manager import WebSocketConnectionManager, log_event
+from app.websocket_manager import log_event
 
 
 class MessageService:
     def __init__(
         self,
-        channel_state: ChannelState,
-        connections: WebSocketConnectionManager,
+        message_repository: MessageRepository,
+        pubsub: PubSubService,
     ):
-        self.channel_state = channel_state
-        self.connections = connections
+        self.message_repository = message_repository
+        self.pubsub = pubsub
 
     async def publish(
         self,
@@ -29,8 +30,8 @@ class MessageService:
             return False, result
 
         message = result
-        self.channel_state.add_message_to_buffer(channel_id, message)
-        recipients = await self.connections.broadcast(
+        await self.message_repository.add_message(channel_id, message)
+        await self.pubsub.publish_message(
             channel_id,
             {
                 "type": "MESSAGE_RECEIVED",
@@ -39,11 +40,11 @@ class MessageService:
             },
             exclude_usuario=exclude_usuario,
         )
+        
         log_event(
-            "message_published",
+            "message_published_pubsub",
             channel_id=channel_id,
             usuario=message["usuario"],
-            recipients=recipients,
             sender_excluded=exclude_usuario is not None,
         )
 
