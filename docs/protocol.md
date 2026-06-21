@@ -1,4 +1,4 @@
-# Protocolo de Comunicação
+# Protocolo de Comunicacao
 
 Este documento registra o protocolo WebSocket do RescueRadio. Para entrada de
 mensagens por datagramas, consulte [Protocolo UDP](udp.md).
@@ -9,20 +9,20 @@ mensagens por datagramas, consulte [Protocolo UDP](udp.md).
 ws://localhost:8001/ws/channel/{channel_id}?usuario={usuario}
 ```
 
-Na execução com Docker Compose, o cliente usa o Kong em `localhost:8001`.
+Na execucao com Docker Compose, o cliente usa o Kong em `localhost:8001`.
 
-Parâmetros:
+Parametros:
 
-| Campo | Origem | Descrição |
+| Campo | Origem | Descricao |
 | --- | --- | --- |
-| `channel_id` | path | Identificador do canal. Na interface atual, o valor padrão é `canal-geral`. |
-| `usuario` | query | Nome do socorrista, com 1 a 80 caracteres após remover espaços externos. |
+| `channel_id` | path | Identificador do canal. Na interface atual, o valor padrao e `canal-geral`. |
+| `usuario` | query | Nome do socorrista, com 1 a 80 caracteres apos remover espacos externos. |
 
-Conexões com `usuario` vazio, formado somente por espaços ou com mais de 80
-caracteres úteis são rejeitadas durante o handshake com o código WebSocket
+Conexoes com `usuario` vazio, formado somente por espacos ou com mais de 80
+caracteres uteis sao rejeitadas durante o handshake com o codigo WebSocket
 `1008`.
 
-## Mensagem enviada pelo cliente
+## Mensagem Enviada Pelo Cliente
 
 ```json
 {
@@ -33,22 +33,22 @@ caracteres úteis são rejeitadas durante o handshake com o código WebSocket
 }
 ```
 
-Validações principais:
+Validacoes principais:
 
 - `type` deve ser `SEND_MESSAGE`;
-- `usuario` é obrigatório, tem seus espaços externos removidos e deve conter
+- `usuario` e obrigatorio, tem seus espacos externos removidos e deve conter
   de 1 a 80 caracteres;
 - `timestamp_iso` deve estar em formato ISO 8601;
-- `corpo_texto` é obrigatório e deve ter até 500 caracteres.
+- `corpo_texto` e obrigatorio e deve ter ate 500 caracteres.
 
-Se um frame de texto não contiver JSON válido, o servidor envia `ERROR` e
-mantém a conexão aberta para que o cliente possa corrigir a mensagem.
+Se um frame de texto nao contiver JSON valido, o servidor envia `ERROR` e
+mantem a conexao aberta para que o cliente possa corrigir a mensagem.
 
-## Eventos enviados pelo servidor
+## Eventos Enviados Pelo Servidor
 
 ### `CONNECTED`
 
-Confirma que a conexão WebSocket foi aceita.
+Confirma que a conexao WebSocket foi aceita.
 
 ```json
 {
@@ -61,7 +61,7 @@ Confirma que a conexão WebSocket foi aceita.
 
 ### `BRIEFING`
 
-Envia as últimas mensagens armazenadas no buffer circular do canal.
+Envia as ultimas mensagens persistidas do canal.
 
 ```json
 {
@@ -73,7 +73,8 @@ Envia as últimas mensagens armazenadas no buffer circular do canal.
 
 ### `MESSAGE_RECEIVED`
 
-Retransmite uma mensagem válida para os membros conectados ao canal.
+Retransmite uma mensagem valida para os outros membros conectados ao canal. O
+remetente WebSocket nao recebe eco da propria mensagem.
 
 ```json
 {
@@ -125,15 +126,15 @@ Informa que um membro saiu do canal e envia a lista atualizada de membros.
 
 ### `ERROR`
 
-Indica que o payload enviado pelo cliente é inválido.
+Indica que o payload enviado pelo cliente e invalido.
 
 ```json
 {
   "type": "ERROR",
   "channel_id": "canal-geral",
-  "message": "Payload inválido"
+  "message": "Payload invalido"
 }
 ```
 
-Para JSON sintaticamente inválido, `message` recebe
-`Payload deve conter JSON válido`.
+Para JSON sintaticamente invalido, `message` recebe
+`Payload deve conter JSON valido`.

@@ -1,42 +1,53 @@
-# Estado em memória
+# Persistencia e Estado Temporario
 
-O estado atual é dividido entre mensagens dos canais e conexões WebSocket.
+O estado atual e dividido entre mensagens persistidas, presenca temporaria e
+conexoes WebSocket locais.
 
-## Buffer de mensagens
+## Mensagens e Briefing
 
-`ChannelState` mantém um `deque(maxlen=50)` por canal. O buffer é usado para
-enviar o briefing quando um cliente WebSocket entra no canal.
+Em ambiente completo, mensagens recebidas por WebSocket e UDP passam pelo
+`MessageService`, sao validadas e gravadas na tabela `channel_messages` do
+PostgreSQL.
 
-```python
-message_buffer = {
-    "canal-geral": deque(maxlen=50)
-}
+Campos principais:
+
+- `id`;
+- `channel_id`;
+- `type`;
+- `usuario`;
+- `timestamp_iso`;
+- `corpo_texto`;
+- `created_at`.
+
+Quando um cliente WebSocket entra em um canal, a API consulta as ultimas 50
+mensagens persistidas daquele canal e envia o evento `BRIEFING`.
+
+Nos testes automatizados, a API usa `InMemoryMessageRepository` quando
+`DATABASE_URL` nao esta configurado. Esse fallback existe para manter a suite
+unitaria leve e nao substitui o PostgreSQL no Docker Compose.
+
+## Presenca
+
+A presenca dos membros online fica no Redis, separada por canal:
+
+```text
+presence:canal-geral -> Lucas, Marcelo
 ```
 
-Mensagens recebidas por WebSocket e UDP passam pelo mesmo `MessageService` e
-são adicionadas ao buffer somente após validação.
+Entradas e saidas WebSocket atualizam o Redis e geram os eventos
+`MEMBER_JOINED` e `MEMBER_LEFT` com a lista atualizada de membros online.
+Remetentes UDP nao aparecem como membros ativos porque nao mantem sessao com a
+API.
 
-## Conexões e presença
+Nos testes automatizados, a API usa `InMemoryPresenceService` quando `REDIS_URL`
+nao esta configurado.
 
-`WebSocketConnectionManager` mantém as conexões por canal e usuário:
+## Conexoes WebSocket
 
-```python
-connections = {
-    "canal-geral": {
-        "Lucas": websocket
-    }
-}
-```
+`WebSocketConnectionManager` continua mantendo os objetos WebSocket locais ao
+processo para realizar o broadcast aos clientes conectados naquela instancia da
+API.
 
-A lista de membros ativos é derivada dessas conexões. Remetentes UDP não são
-registrados como membros porque não mantêm uma sessão com a API.
-
-## Limitações
-
-- os dados são perdidos ao reiniciar a API;
-- não há histórico persistente;
-- múltiplas instâncias ainda não compartilham estado;
-- conexões e buffers são locais ao processo.
-
-Persistência e estado distribuído aguardam a especificação de PostgreSQL,
-Redis ou Kafka.
+Esta etapa nao usa Redis Pub/Sub. Portanto, PostgreSQL e Redis ja removem a
+perda de historico e centralizam presenca, mas multiplas instancias da API
+ainda nao compartilham broadcast em tempo real.
