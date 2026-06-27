@@ -2,8 +2,9 @@ import asyncio
 from typing import Protocol
 
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncEngine
 
-from app.auth import ALLOWED_ROLES, ROLE_ADMIN, ROLE_OPERADOR, hash_password
+from app.domain.auth import ALLOWED_ROLES, ROLE_ADMIN, ROLE_OPERADOR, hash_password
 
 
 class DuplicateUserError(Exception):
@@ -82,20 +83,19 @@ class InMemoryUserRepository:
     ) -> dict:
         if role not in ALLOWED_ROLES:
             raise InvalidRoleError(role)
-        normalized_username = username.strip()
+        normalized = username.strip()
         async with self.lock:
-            if normalized_username in self.users:
-                raise DuplicateUserError(normalized_username)
-
+            if normalized in self.users:
+                raise DuplicateUserError(normalized)
             user = {
-                "username": normalized_username,
-                "display_name": (display_name or normalized_username).strip(),
+                "username": normalized,
+                "display_name": (display_name or normalized).strip(),
                 "password_hash": hash_password(password),
                 "role": role,
                 "base_id": base_id.strip() if base_id else None,
                 "uf_scope": uf_scope.strip().upper() if uf_scope else None,
             }
-            self.users[normalized_username] = user
+            self.users[normalized] = user
             return dict(user)
 
     async def get_by_username(self, username: str) -> dict | None:
@@ -106,11 +106,7 @@ class InMemoryUserRepository:
     async def list_users(self) -> list[dict]:
         async with self.lock:
             return [
-                dict(user)
-                for user in sorted(
-                    self.users.values(),
-                    key=lambda item: item["username"],
-                )
+                dict(u) for u in sorted(self.users.values(), key=lambda x: x["username"])
             ]
 
     async def delete_user(self, username: str) -> bool:
@@ -126,13 +122,10 @@ class InMemoryUserRepository:
     ) -> dict | None:
         if role not in ALLOWED_ROLES:
             raise InvalidRoleError(role)
-
         async with self.lock:
             user = self.users.get(username.strip())
-
             if user is None:
                 return None
-
             user["role"] = role
             user["base_id"] = base_id.strip() if base_id else None
             user["uf_scope"] = uf_scope.strip().upper() if uf_scope else None
@@ -159,22 +152,21 @@ class InMemoryUserRepository:
 
     async def has_admin(self) -> bool:
         async with self.lock:
-            return any(user["role"] == ROLE_ADMIN for user in self.users.values())
+            return any(u["role"] == ROLE_ADMIN for u in self.users.values())
 
     async def close(self):
         return None
 
 
 class PostgresUserRepository:
-    def __init__(self, database_url: str):
-        from app.database import create_users_table
-        from sqlalchemy.ext.asyncio import create_async_engine
+    def __init__(self, engine: AsyncEngine):
+        from app.infra.db.tables import create_users_table
 
-        self.engine = create_async_engine(database_url)
+        self.engine = engine
         self.users = create_users_table()
 
     async def init_schema(self):
-        from app.database import metadata
+        from app.infra.db.tables import metadata
 
         async with self.engine.begin() as connection:
             await connection.run_sync(metadata.create_all)
@@ -195,41 +187,31 @@ class PostgresUserRepository:
         if role not in ALLOWED_ROLES:
             raise InvalidRoleError(role)
 
-        normalized_username = username.strip()
-        normalized_display_name = (display_name or normalized_username).strip()
-        normalized_base_id = base_id.strip() if base_id else None
-        normalized_uf_scope = uf_scope.strip().upper() if uf_scope else None
-
+        normalized = username.strip()
         async with self.engine.begin() as connection:
-            await connection.exec_driver_sql("ALTER TABLE users ADD COLUMN IF NOT EXISTS base_id VARCHAR(80)")
-            await connection.exec_driver_sql("ALTER TABLE users ADD COLUMN IF NOT EXISTS uf_scope VARCHAR(2)")
             await connection.execute(text("LOCK TABLE users IN EXCLUSIVE MODE"))
-
-            insert_statement = (
-                self.users.insert()
-                .values(
-                    username=normalized_username,
-                    display_name=normalized_display_name,
-                    password_hash=hash_password(password),
-                    role=role,
-                    base_id=normalized_base_id,
-                    uf_scope=normalized_uf_scope,
-                )
-                .returning(
-                    self.users.c.username,
-                    self.users.c.display_name,
-                    self.users.c.password_hash,
-                    self.users.c.role,
-                    self.users.c.base_id,
-                    self.users.c.uf_scope,
-                )
-            )
-
             try:
-                result = await connection.execute(insert_statement)
+                result = await connection.execute(
+                    self.users.insert()
+                    .values(
+                        username=normalized,
+                        display_name=(display_name or normalized).strip(),
+                        password_hash=hash_password(password),
+                        role=role,
+                        base_id=base_id.strip() if base_id else None,
+                        uf_scope=uf_scope.strip().upper() if uf_scope else None,
+                    )
+                    .returning(
+                        self.users.c.username,
+                        self.users.c.display_name,
+                        self.users.c.password_hash,
+                        self.users.c.role,
+                        self.users.c.base_id,
+                        self.users.c.uf_scope,
+                    )
+                )
             except IntegrityError as error:
-                raise DuplicateUserError(normalized_username) from error
-
+                raise DuplicateUserError(normalized) from error
             return dict(result.mappings().one())
 
     async def get_by_username(self, username: str) -> dict | None:
@@ -247,7 +229,6 @@ class PostgresUserRepository:
         async with self.engine.connect() as connection:
             result = await connection.execute(query)
             row = result.mappings().one_or_none()
-
         return dict(row) if row else None
 
     async def list_users(self) -> list[dict]:
@@ -265,13 +246,13 @@ class PostgresUserRepository:
         async with self.engine.connect() as connection:
             result = await connection.execute(query)
             rows = result.mappings().all()
-
         return [dict(row) for row in rows]
 
     async def delete_user(self, username: str) -> bool:
-        delete_statement = self.users.delete().where(self.users.c.username == username.strip())
         async with self.engine.begin() as connection:
-            result = await connection.execute(delete_statement)
+            result = await connection.execute(
+                self.users.delete().where(self.users.c.username == username.strip())
+            )
         return result.rowcount > 0
 
     async def update_role(
@@ -284,28 +265,25 @@ class PostgresUserRepository:
         if role not in ALLOWED_ROLES:
             raise InvalidRoleError(role)
 
-        update_statement = (
-            self.users.update()
-            .where(self.users.c.username == username.strip())
-            .values(
-                role=role,
-                base_id=base_id.strip() if base_id else None,
-                uf_scope=uf_scope.strip().upper() if uf_scope else None,
-            )
-            .returning(
-                self.users.c.username,
-                self.users.c.display_name,
-                self.users.c.password_hash,
-                self.users.c.role,
-                self.users.c.base_id,
-                self.users.c.uf_scope,
-            )
-        )
-
         async with self.engine.begin() as connection:
-            result = await connection.execute(update_statement)
+            result = await connection.execute(
+                self.users.update()
+                .where(self.users.c.username == username.strip())
+                .values(
+                    role=role,
+                    base_id=base_id.strip() if base_id else None,
+                    uf_scope=uf_scope.strip().upper() if uf_scope else None,
+                )
+                .returning(
+                    self.users.c.username,
+                    self.users.c.display_name,
+                    self.users.c.password_hash,
+                    self.users.c.role,
+                    self.users.c.base_id,
+                    self.users.c.uf_scope,
+                )
+            )
             row = result.mappings().one_or_none()
-
         return dict(row) if row else None
 
     async def update_identity(
@@ -325,21 +303,20 @@ class PostgresUserRepository:
         if not values:
             return await self.get_by_username(username)
 
-        update_statement = (
-            self.users.update()
-            .where(self.users.c.username == username.strip())
-            .values(**values)
-            .returning(
-                self.users.c.username,
-                self.users.c.display_name,
-                self.users.c.password_hash,
-                self.users.c.role,
-                self.users.c.base_id,
-                self.users.c.uf_scope,
-            )
-        )
         async with self.engine.begin() as connection:
-            result = await connection.execute(update_statement)
+            result = await connection.execute(
+                self.users.update()
+                .where(self.users.c.username == username.strip())
+                .values(**values)
+                .returning(
+                    self.users.c.username,
+                    self.users.c.display_name,
+                    self.users.c.password_hash,
+                    self.users.c.role,
+                    self.users.c.base_id,
+                    self.users.c.uf_scope,
+                )
+            )
             row = result.mappings().one_or_none()
         return dict(row) if row else None
 
@@ -348,7 +325,9 @@ class PostgresUserRepository:
 
         async with self.engine.connect() as connection:
             result = await connection.execute(
-                select(func.count()).select_from(self.users).where(self.users.c.role == ROLE_ADMIN)
+                select(func.count())
+                .select_from(self.users)
+                .where(self.users.c.role == ROLE_ADMIN)
             )
         return result.scalar_one() > 0
 
