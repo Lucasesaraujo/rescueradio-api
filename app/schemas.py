@@ -73,6 +73,7 @@ class ProfileRequest(BaseModel):
     base_id: str = Field(min_length=1, max_length=80)
     function: str = Field(default="", max_length=120)
     contact: str = Field(min_length=1, max_length=120)
+    email: str | None = Field(default=None, max_length=160)
     status: str = Field(default="disponivel", min_length=1, max_length=40)
     skills: list[str] = Field(default_factory=list)
 

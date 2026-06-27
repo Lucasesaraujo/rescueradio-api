@@ -222,6 +222,7 @@ class InMemoryDomainRepository:
             "base_id": data["base_id"].strip(),
             "function": (data.get("function") or "").strip(),
             "contact": data["contact"].strip(),
+            "email": (data.get("email") or "").strip() or None,
             "status": data["status"].strip(),
             "connection_status": data.get("connection_status", "offline"),
             "last_seen_at": data.get("last_seen_at"),
@@ -503,6 +504,7 @@ class PostgresDomainRepository:
             await connection.exec_driver_sql("ALTER TABLE bases ADD COLUMN IF NOT EXISTS uf VARCHAR(2) DEFAULT 'PE'")
             await connection.exec_driver_sql("ALTER TABLE operator_profiles ADD COLUMN IF NOT EXISTS full_name VARCHAR(160)")
             await connection.exec_driver_sql("ALTER TABLE operator_profiles ADD COLUMN IF NOT EXISTS callsign VARCHAR(40)")
+            await connection.exec_driver_sql("ALTER TABLE operator_profiles ADD COLUMN IF NOT EXISTS email VARCHAR(160)")
             await connection.exec_driver_sql("ALTER TABLE operator_profiles ADD COLUMN IF NOT EXISTS connection_status VARCHAR(40) DEFAULT 'offline'")
             await connection.exec_driver_sql("ALTER TABLE operator_profiles ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMP WITH TIME ZONE")
             await connection.exec_driver_sql(
@@ -642,6 +644,7 @@ class PostgresDomainRepository:
             "base_id": data["base_id"].strip(),
             "function": (data.get("function") or "").strip(),
             "contact": data["contact"].strip(),
+            "email": (data.get("email") or "").strip() or None,
             "status": data["status"].strip(),
             "connection_status": data.get("connection_status", "offline"),
             "last_seen_at": data.get("last_seen_at"),
@@ -658,6 +661,7 @@ class PostgresDomainRepository:
                 "base_id": values["base_id"],
                 "function": values["function"],
                 "contact": values["contact"],
+                "email": values["email"],
                 "status": values["status"],
                 "connection_status": values["connection_status"],
                 "last_seen_at": values["last_seen_at"],

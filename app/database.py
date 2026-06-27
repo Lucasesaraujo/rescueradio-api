@@ -139,6 +139,7 @@ def create_operator_profiles_table() -> Table:
         Column("base_id", String(80), nullable=False, index=True),
         Column("function", String(120), nullable=False),
         Column("contact", String(120), nullable=False),
+        Column("email", String(160), nullable=True),
         Column("status", String(40), nullable=False),
         Column("connection_status", String(40), nullable=False, server_default="offline"),
         Column("last_seen_at", DateTime(timezone=True), nullable=True),

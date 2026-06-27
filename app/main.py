@@ -380,7 +380,7 @@ def create_app(
         return bool(
             profile
             and profile.get("full_name")
-            and len(str(profile.get("full_name", "")).split()) >= 2
+            and len(str(profile.get("full_name", "")).strip()) >= 6
             and profile.get("base_id")
         )
 
