@@ -114,6 +114,32 @@ def test_login_returns_token_and_me_returns_current_user():
         assert me.json()["display_name"] == "Admin"
 
 
+def test_admin_can_delete_user_but_not_self():
+    app = create_app(udp_host="127.0.0.1", udp_port=0)
+
+    with TestClient(app) as client:
+        admin_token = bootstrap_admin(client)
+        code = create_invite(client, admin_token)
+        created = client.post(
+            "/auth/register",
+            json={
+                "username": "operador1",
+                "display_name": "Operador 1",
+                "password": "segredo123",
+                "invite_code": code,
+            },
+        )
+        assert created.status_code == 201
+
+        deleted = client.delete("/users/operador1", headers=auth(admin_token))
+        assert deleted.status_code == 204
+        users = client.get("/users", headers=auth(admin_token))
+        assert "operador1" not in [user["username"] for user in users.json()]
+
+        self_delete = client.delete("/users/admin", headers=auth(admin_token))
+        assert self_delete.status_code == 400
+
+
 def test_metrics_endpoint_exposes_prometheus_payload():
     app = create_app(udp_host="127.0.0.1", udp_port=0)
 

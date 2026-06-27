@@ -722,6 +722,31 @@ def create_app(
         )
         return public_user(user)
 
+    @app.delete("/users/{username}", status_code=status.HTTP_204_NO_CONTENT, tags=["Usuarios"])
+    async def delete_user(
+        username: str,
+        current_user: dict = Depends(get_current_user),
+    ):
+        require_role(current_user, {"admin"})
+        normalized_username = username.strip()
+        if normalized_username == current_user["username"]:
+            raise HTTPException(status_code=400, detail="Usuario autenticado nao pode se excluir")
+        existing_user = await user_repository.get_by_username(normalized_username)
+        if existing_user is None:
+            raise HTTPException(status_code=404, detail="Usuario nao encontrado")
+        await domain_repository.delete_profile(normalized_username)
+        deleted = await user_repository.delete_user(normalized_username)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Usuario nao encontrado")
+        await audit_publisher.publish(
+            "user_deleted",
+            {
+                "username": normalized_username,
+                "deleted_by": current_user["username"],
+            },
+        )
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
     @app.get("/profiles/me", tags=["Perfis"])
     async def get_my_profile(current_user: dict = Depends(get_current_user)):
         profile = await domain_repository.get_profile(current_user["username"])
