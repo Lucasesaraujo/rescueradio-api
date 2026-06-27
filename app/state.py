@@ -1,3 +1,4 @@
+import asyncio
 from collections import deque
 from typing import Protocol
 
@@ -9,7 +10,13 @@ class MessageRepository(Protocol):
     async def add_message(self, channel_id: str, message: dict):
         ...
 
+    async def clear_channel(self, channel_id: str) -> int:
+        ...
+
     async def get_briefing(self, channel_id: str) -> list[dict]:
+        ...
+
+    async def get_channel_messages(self, channel_id: str) -> list[dict]:
         ...
 
 
@@ -17,18 +24,31 @@ class InMemoryMessageRepository:
     def __init__(self, buffer_size: int = BRIEFING_SIZE):
         self.buffer_size = buffer_size
         self.message_buffer: dict[str, deque[dict]] = {}
+        self.lock = asyncio.Lock()
 
     def ensure_channel(self, channel_id: str):
         if channel_id not in self.message_buffer:
             self.message_buffer[channel_id] = deque(maxlen=self.buffer_size)
 
     async def add_message(self, channel_id: str, message: dict):
-        self.ensure_channel(channel_id)
-        self.message_buffer[channel_id].append(message)
+        async with self.lock:
+            self.ensure_channel(channel_id)
+            self.message_buffer[channel_id].append(message)
+
+    async def clear_channel(self, channel_id: str) -> int:
+        async with self.lock:
+            self.ensure_channel(channel_id)
+            removed = len(self.message_buffer[channel_id])
+            self.message_buffer[channel_id].clear()
+            return removed
 
     async def get_briefing(self, channel_id: str) -> list[dict]:
-        self.ensure_channel(channel_id)
-        return list(self.message_buffer[channel_id])
+        async with self.lock:
+            self.ensure_channel(channel_id)
+            return list(self.message_buffer[channel_id])
+
+    async def get_channel_messages(self, channel_id: str) -> list[dict]:
+        return await self.get_briefing(channel_id)
 
 
 class PostgresMessageRepository:
@@ -60,6 +80,14 @@ class PostgresMessageRepository:
         async with self.engine.begin() as connection:
             await connection.execute(insert_statement)
 
+    async def clear_channel(self, channel_id: str) -> int:
+        delete_statement = self.channel_messages.delete().where(
+            self.channel_messages.c.channel_id == channel_id
+        )
+        async with self.engine.begin() as connection:
+            result = await connection.execute(delete_statement)
+        return int(result.rowcount or 0)
+
     async def get_briefing(self, channel_id: str) -> list[dict]:
         from sqlalchemy import desc, select
 
@@ -90,4 +118,35 @@ class PostgresMessageRepository:
                 "corpo_texto": row["corpo_texto"],
             }
             for row in reversed(rows)
+        ]
+
+    async def get_channel_messages(self, channel_id: str) -> list[dict]:
+        from sqlalchemy import asc, select
+
+        query = (
+            select(
+                self.channel_messages.c.type,
+                self.channel_messages.c.usuario,
+                self.channel_messages.c.timestamp_iso,
+                self.channel_messages.c.corpo_texto,
+            )
+            .where(self.channel_messages.c.channel_id == channel_id)
+            .order_by(
+                asc(self.channel_messages.c.created_at),
+                asc(self.channel_messages.c.id),
+            )
+        )
+
+        async with self.engine.connect() as connection:
+            result = await connection.execute(query)
+            rows = result.mappings().all()
+
+        return [
+            {
+                "type": row["type"],
+                "usuario": row["usuario"],
+                "timestamp_iso": row["timestamp_iso"],
+                "corpo_texto": row["corpo_texto"],
+            }
+            for row in rows
         ]

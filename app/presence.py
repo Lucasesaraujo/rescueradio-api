@@ -1,3 +1,4 @@
+import asyncio
 from typing import Protocol
 
 
@@ -21,26 +22,31 @@ class PresenceService(Protocol):
 class InMemoryPresenceService:
     def __init__(self):
         self.members_by_channel: dict[str, dict[str, str]] = {}
+        self.lock = asyncio.Lock()
 
     async def connect(self, channel_id: str, usuario: str):
-        self.members_by_channel.setdefault(channel_id, {})[usuario] = "online"
+        async with self.lock:
+            self.members_by_channel.setdefault(channel_id, {})[usuario] = "online"
 
     async def disconnect(self, channel_id: str, usuario: str):
-        channel_members = self.members_by_channel.setdefault(channel_id, {})
-        channel_members.pop(usuario, None)
+        async with self.lock:
+            channel_members = self.members_by_channel.setdefault(channel_id, {})
+            channel_members.pop(usuario, None)
 
     async def get_active_members(self, channel_id: str) -> list[dict]:
-        channel_members = self.members_by_channel.setdefault(channel_id, {})
-        return [
-            {"usuario": usuario, "status": status}
-            for usuario, status in channel_members.items()
-        ]
+        async with self.lock:
+            channel_members = self.members_by_channel.setdefault(channel_id, {})
+            return [
+                {"usuario": usuario, "status": status}
+                for usuario, status in channel_members.items()
+            ]
 
     async def close(self):
         return None
 
     async def clear_all(self):
-        self.members_by_channel.clear()
+        async with self.lock:
+            self.members_by_channel.clear()
 
 
 class RedisPresenceService:

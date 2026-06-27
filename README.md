@@ -1,111 +1,30 @@
 # RescueRadio API
 
-Backend de comunicacao do RescueRadio, implementado com Python e FastAPI.
+Backend FastAPI do RescueRadio, responsavel por autenticacao, comunicacao em
+tempo real, persistencia, presenca, metricas e auditoria.
 
 ## Responsabilidades
 
-- health check HTTP;
-- conexoes WebSocket por canal;
-- broadcast de mensagens;
-- cliente de terminal com reconexao automatica;
-- persistencia de mensagens em PostgreSQL;
-- briefing com as ultimas mensagens persistidas;
-- presenca de membros em Redis;
-- validacao do protocolo;
-- entrada de mensagens por UDP;
-- futuramente, JWT, Kafka e observabilidade.
-
-## Decisao Tecnologica
-
-A API utiliza Python 3.12 com FastAPI, Uvicorn, Pydantic, PostgreSQL e Redis.
-O FastAPI foi escolhido porque oferece suporte nativo a operacoes assincronas e
-WebSocket, adequadas para manter varias conexoes simultaneas e transmitir
-eventos em tempo real. O Pydantic centraliza a tipagem e a validacao dos
-payloads, enquanto o modelo assincrono do Python permite integrar a escuta UDP,
-PostgreSQL e Redis ao mesmo servico sem recorrer a sockets TCP puros.
-
-Na arquitetura do RescueRadio, esta API recebe conexoes HTTP e WebSocket
-encaminhadas pelo Kong, persiste mensagens no PostgreSQL, mantem presenca
-temporaria no Redis e tambem recebe datagramas UDP na porta `9000`. Mensagens
-validas vindas de ambos os transportes passam pelo mesmo servico de publicacao
-antes de entrar no historico e serem retransmitidas aos clientes.
-
-## Persistencia, Presenca e Briefing
-
-As mensagens validas sao gravadas na tabela `channel_messages` do PostgreSQL.
-Quando um socorrista estabelece uma nova conexao WebSocket, o servidor consulta
-as ultimas 50 mensagens do canal e envia esse historico no evento `BRIEFING`.
-
-A presenca dos socorristas online fica no Redis, separada por canal. A entrada
-de uma conexao gera o evento `MEMBER_JOINED`, e a desconexao gera `MEMBER_LEFT`,
-ambos com a lista atualizada de membros online. O gerenciador WebSocket continua
-mantendo apenas as conexoes locais usadas para broadcast.
-
-Para evitar que um refresh do navegador pareca uma saida real do socorrista, a
-API usa uma pequena tolerancia antes de emitir `MEMBER_LEFT`. Se o mesmo
-usuario reconectar ao mesmo canal dentro de `DISCONNECT_GRACE_SECONDS`, a saida
-pendente e cancelada.
-
-## Protocolo WebSocket
-
-O cliente envia mensagens JSON com o seguinte contrato:
-
-```json
-{
-  "type": "SEND_MESSAGE",
-  "usuario": "Lucas",
-  "timestamp_iso": "2026-06-04T21:30:00Z",
-  "corpo_texto": "Equipe Alfa chegou ao ponto de encontro."
-}
-```
-
-O modelo de dominio da mensagem e `{usuario, timestamp_iso, corpo_texto}`. O
-campo adicional `type: SEND_MESSAGE` identifica o comando dentro do protocolo.
-
-O nome do usuario deve conter de 1 a 80 caracteres uteis. Espacos externos sao
-removidos, e conexoes com nome vazio ou acima do limite sao rejeitadas com o
-codigo WebSocket `1008`. Frames que nao contenham JSON valido recebem `ERROR`
-sem encerrar a conexao.
-
-Eventos enviados pelo servidor:
-
-- `CONNECTED`: confirma a conexao;
-- `BRIEFING`: envia ate 50 mensagens anteriores do canal;
-- `MESSAGE_RECEIVED`: retransmite uma mensagem valida;
-- `MEMBER_JOINED`: informa a entrada de um socorrista;
-- `MEMBER_LEFT`: informa a saida de um socorrista;
-- `ERROR`: informa um payload invalido.
-
-Mensagens `SEND_MESSAGE` recebidas por WebSocket sao enviadas para os outros
-socorristas conectados ao mesmo canal. O remetente nao recebe eco da propria
-mensagem. Eventos de sistema, como entrada e saida de membros, continuam sendo
-enviados para todos os membros conectados ao canal.
-
-## Estrutura de Pastas
-
-```text
-rescueradio-api/
-|-- app/                   # API, estado, validadores e transportes
-|   |-- database.py         # schema SQLAlchemy
-|   |-- presence.py         # presenca em memoria ou Redis
-|   |-- state.py            # repositorios de mensagens
-|   `-- terminal_client.py  # cliente WebSocket via terminal
-|-- docs/                  # protocolo e modelagem do estado
-|-- tests/                 # testes de WebSocket, validacao, UDP e repositorios
-|-- Dockerfile
-|-- requirements.txt       # dependencias de execucao
-|-- requirements-dev.txt   # dependencias de desenvolvimento e testes
-`-- README.md
-```
+- cadastro por convite com JWT;
+- bootstrap controlado do primeiro `admin`;
+- perfis operacionais por usuario;
+- gestao de bases, ocorrencias, operacoes e membros;
+- WebSocket autenticado por canal;
+- briefing automatico com as ultimas 50 mensagens;
+- broadcast em tempo real;
+- persistencia de mensagens e usuarios no PostgreSQL;
+- presenca online em Redis;
+- Redis Pub/Sub para broadcast entre instancias;
+- locks em estados mutaveis em memoria;
+- auditoria assincrona em Kafka;
+- endpoint `/metrics` para Prometheus.
 
 ## Desenvolvimento
 
 Requisitos:
 
 - Python 3.12;
-- PostgreSQL e Redis, quando `DATABASE_URL` e `REDIS_URL` estiverem definidos.
-
-Crie um ambiente virtual, instale as dependencias e execute a API:
+- PostgreSQL, Redis e Kafka quando as variaveis de ambiente estiverem definidas.
 
 ```bash
 python -m venv .venv
@@ -113,59 +32,199 @@ python -m pip install -r requirements-dev.txt
 python -m uvicorn app.main:app --reload
 ```
 
-Sem `DATABASE_URL` e `REDIS_URL`, a API usa implementacoes em memoria para
-testes e desenvolvimento rapido. No Docker Compose, essas variaveis sao
-configuradas automaticamente e a API usa PostgreSQL e Redis reais.
+Sem `DATABASE_URL`, `REDIS_URL` e `KAFKA_BOOTSTRAP_SERVERS`, a API usa
+repositorios em memoria, presenca em memoria e auditoria noop. Isso facilita
+testes locais rapidos.
 
-O health check fica disponivel em <http://localhost:8000/health>.
+## Variaveis principais
 
-O endpoint WebSocket e:
+| Variavel | Uso |
+| --- | --- |
+| `DATABASE_URL` | PostgreSQL para mensagens e usuarios |
+| `REDIS_URL` | Presenca e Pub/Sub |
+| `JWT_SECRET` | Assinatura dos tokens JWT |
+| `JWT_EXPIRE_MINUTES` | Expiracao do token, padrao 480 |
+| `BOOTSTRAP_ADMIN_KEY` | Chave para criar o primeiro admin, padrao `rescueradio-bootstrap` |
+| `KAFKA_BOOTSTRAP_SERVERS` | Bootstrap Kafka para auditoria |
+| `KAFKA_AUDIT_TOPIC` | Topico de auditoria, padrao `rescueradio.audit` |
+| `CORS_ALLOW_ORIGINS` | Origens liberadas para a GUI |
+| `ENABLE_UDP` | Habilita transporte UDP legado quando `true`, padrao `false` |
+| `UDP_HOST` / `UDP_PORT` | Endereco UDP legado, padrao `0.0.0.0:9000` |
+
+## Autenticacao
+
+Bootstrap do primeiro admin:
+
+```http
+POST /auth/bootstrap-admin
+Content-Type: application/json
+
+{
+  "username": "admin",
+  "password": "segredo123",
+  "display_name": "Admin",
+  "bootstrap_key": "rescueradio-bootstrap"
+}
+```
+
+Depois que existir um admin, novos cadastros exigem convite de uso unico.
+Convites sao criados por admin:
+
+```http
+POST /invites
+Authorization: Bearer <token-admin>
+Content-Type: application/json
+
+{
+  "base_id": "base-central",
+  "role": "operador",
+  "expires_in_hours": 72
+}
+```
+
+Cadastro com convite:
+
+```http
+POST /auth/register
+Content-Type: application/json
+
+{
+  "username": "lucas",
+  "password": "segredo123",
+  "display_name": "Lucas",
+  "invite_code": "codigo-do-convite"
+}
+```
+
+Login:
+
+```http
+POST /auth/login
+Content-Type: application/json
+
+{
+  "username": "lucas",
+  "password": "segredo123"
+}
+```
+
+O login retorna:
+
+```json
+{
+  "access_token": "...",
+  "token_type": "bearer",
+  "user": {
+    "username": "lucas",
+    "display_name": "Lucas",
+    "role": "admin"
+  }
+}
+```
+
+Consulta da sessao:
+
+```http
+GET /auth/me
+Authorization: Bearer <token>
+```
+
+## WebSocket
+
+Endpoint:
 
 ```text
-ws://localhost:8000/ws/channel/{channel_id}?usuario={usuario}
+ws://localhost:8000/ws/channel/{channel_id}?token={jwt}
 ```
 
-## Cliente de Terminal
-
-Este cliente existe para validar a Entrega 2 em um nivel mais baixo, via
-console, sem substituir a interface grafica do RescueRadio. A aplicacao Angular
-usa o mesmo endpoint e o mesmo protocolo WebSocket descritos aqui.
-
-Com a API em execucao, abra tres terminais de cliente e conecte tres
-socorristas ao mesmo canal:
-
-```bash
-python -m app.terminal_client --usuario Lucas
-```
-
-```bash
-python -m app.terminal_client --usuario Marcelo
-```
-
-```bash
-python -m app.terminal_client --usuario Julia
-```
-
-Digite uma mensagem em qualquer terminal e pressione Enter. Os outros dois
-terminais devem receber a mensagem imediatamente no formato:
+Notificacoes globais autenticadas:
 
 ```text
-[canal-geral] Lucas: Equipe Alfa chegou ao local.
+ws://localhost:8000/ws/notifications?token={jwt}
 ```
 
-O terminal que enviou a mensagem nao recebe eco da propria mensagem. Para sair
-do cliente, digite `/sair`, `/exit` ou `/quit`.
+Quando uma operacao e criada ou um operador e adicionado, o servidor envia
+`OPERATION_ASSIGNED` para o usuario designado conectado. O push nao substitui
+persistencia: se o operador estiver offline, a operacao aparece na listagem ao
+entrar.
 
-O cliente tenta reconectar automaticamente quando a conexao cai. Para testar
-via Kong no ambiente Docker Compose, informe a URL do gateway:
+Eventos enviados pelo servidor:
 
-```bash
-python -m app.terminal_client --url ws://localhost:8001 --usuario Lucas
+- `CONNECTED`;
+- `BRIEFING`;
+- `MESSAGE_RECEIVED`;
+- `MEMBER_JOINED`;
+- `MEMBER_LEFT`;
+- `ERROR`.
+
+O usuario exibido no chat e derivado do JWT. Mesmo que o cliente envie outro
+`usuario` dentro do payload, o servidor substitui pelo usuario autenticado.
+
+## Dominio operacional
+
+Endpoints principais:
+
+- `GET /bases`, `POST /bases`, `PATCH /bases/{id}` e `DELETE /bases/{id}`;
+- `GET /profiles/me` e `PUT /profiles/me`;
+- `GET /operators?base_id=&status=&skill=`;
+- `GET /users` e `PATCH /users/{username}/role`;
+- `POST /occurrences` e `GET /occurrences`;
+- `POST /operations`, `GET /operations`, `GET /operations/{id}`;
+- `POST /operations/{id}/members`;
+- `POST /operations/{id}/close` com `outcome: "success" | "failure"`;
+- `GET /operations/{id}/audit`.
+
+O sistema cria automaticamente a base `base-central` quando o schema e
+inicializado. Canais de chat usam:
+
+- `base:{base_id}:geral` para o chat permanente da base;
+- `operacao:{operation_id}` para o chat da operacao.
+
+Quando uma operacao e finalizada, o canal especifico passa a rejeitar novas
+mensagens e o endpoint de auditoria preserva ocorrencia, participantes,
+mensagens, eventos de status, resultado formal e resumo de encerramento.
+
+## UDP legado opcional
+
+O fluxo principal da Entrega 3 e a GUI via HTTP/WebSocket. O transporte UDP de
+entregas anteriores fica desabilitado por padrao e pode ser ligado com
+`ENABLE_UDP=true` para testes especificos. Quando habilitado, a API recebe
+datagramas JSON em `9000/udp`:
+
+```json
+{
+  "type": "SEND_MESSAGE",
+  "channel_id": "canal-geral",
+  "usuario": "Central",
+  "timestamp_iso": "2026-06-09T12:00:00Z",
+  "corpo_texto": "Mensagem enviada por UDP."
+}
 ```
 
-O servidor emite logs estruturados no console para conexoes, desconexoes,
-mensagens recebidas, broadcasts, payloads invalidos e conexoes quebradas
-removidas.
+Mensagens validas entram no mesmo historico persistente e sao retransmitidas
+para clientes WebSocket do canal.
+
+## Observabilidade
+
+O endpoint Prometheus fica em:
+
+```text
+GET /metrics
+```
+
+Metricas principais:
+
+- `rescueradio_active_connections`;
+- `rescueradio_messages_published_total`;
+- `rescueradio_websocket_errors_total`;
+- `rescueradio_reconnections_total`;
+- `rescueradio_udp_events_total`, apenas quando o legado UDP for usado;
+- `rescueradio_kafka_failures_total`;
+- `rescueradio_auth_events_total`.
+
+Eventos de auditoria sao publicados no Kafka sem bloquear o chat. Se o Kafka
+ficar indisponivel, a falha e registrada em logs/metricas e a mensagem continua
+seguindo para o historico e para o WebSocket.
 
 ## Testes
 
@@ -175,34 +234,5 @@ python -m pytest
 
 ## Docker
 
-Para executar somente a API sem Postgres/Redis:
-
-```bash
-docker build -t rescueradio-api:local .
-docker run --rm -p 8000:8000 -p 9000:9000/udp rescueradio-api:local
-```
-
-Para executar a arquitetura completa com PostgreSQL, Redis, Kong e frontend,
-use o repositorio `rescueradio-infra`.
-
-A API recebe datagramas JSON em `9000/udp`. Mensagens validas entram no
-PostgreSQL quando `DATABASE_URL` esta configurado e sao retransmitidas aos
-clientes WebSocket. Nesta fase, o transporte UDP nao envia ACK nem mantem
-presenca.
-
-## Documentacao
-
-- [Protocolo WebSocket](docs/protocol.md)
-- [Persistencia e estado temporario](docs/in-memory-state.md)
-- [Exemplos de mensagens](docs/sample-messages.md)
-- [Protocolo UDP](docs/udp.md)
-
-## Fluxo de Desenvolvimento
-
-- `main`: homologacao das versoes aprovadas em `develop`;
-- `develop`: desenvolvimento e integracao das funcionalidades aprovadas;
-- `feature/*`: desenvolvimento isolado, sempre criado a partir de `develop`.
-
-As branches de funcionalidade devem voltar para `develop` por pull request
-apos a aprovacao do CI. A promocao para homologacao ocorre por pull request de
-`develop` para `main`.
+Para executar a arquitetura completa com PostgreSQL, Redis, Kafka, Kong,
+Prometheus, Loki, Grafana e frontend, use o repositorio `rescueradio-infra`.
