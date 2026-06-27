@@ -8,21 +8,11 @@ DEFAULT_BASE = {
     "id": "base-central",
     "name": "Base Central",
     "city": "Recife",
+    "uf": "PE",
     "latitude": -8.0476,
     "longitude": -34.877,
     "coverage_cities": ["Recife", "Olinda", "Paulista", "Jaboatao dos Guararapes", "Camaragibe"],
 }
-
-DEFAULT_FUNCTIONS = [
-    {"id": "socorrista", "label": "Socorrista"},
-    {"id": "condutor", "label": "Condutor"},
-    {"id": "enfermeiro", "label": "Enfermeiro"},
-    {"id": "medico", "label": "Medico"},
-    {"id": "comandante_operacional", "label": "Comandante operacional"},
-    {"id": "operador_radio", "label": "Operador de radio"},
-    {"id": "resgate_tecnico", "label": "Resgate tecnico"},
-]
-
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -86,18 +76,6 @@ class DomainRepository(Protocol):
         ...
 
     async def delete_base(self, base_id: str) -> bool:
-        ...
-
-    async def list_functions(self) -> list[dict]:
-        ...
-
-    async def create_function(self, data: dict) -> dict:
-        ...
-
-    async def update_function(self, function_id: str, data: dict) -> dict | None:
-        ...
-
-    async def delete_function(self, function_id: str) -> bool:
         ...
 
     async def get_profile(self, username: str) -> dict | None:
@@ -178,7 +156,6 @@ class InMemoryDomainRepository:
     def __init__(self):
         self.lock = asyncio.Lock()
         self.bases: dict[str, dict] = {}
-        self.functions: dict[str, dict] = {}
         self.profiles: dict[str, dict] = {}
         self.occurrences: dict[str, dict] = {}
         self.operations: dict[str, dict] = {}
@@ -188,8 +165,6 @@ class InMemoryDomainRepository:
     async def init_schema(self):
         async with self.lock:
             self.bases.setdefault(DEFAULT_BASE["id"], dict(DEFAULT_BASE))
-            for function in DEFAULT_FUNCTIONS:
-                self.functions.setdefault(function["id"], dict(function))
 
     async def close(self):
         return None
@@ -203,6 +178,7 @@ class InMemoryDomainRepository:
             "id": data["id"].strip(),
             "name": data["name"].strip(),
             "city": data["city"].strip(),
+            "uf": data.get("uf", "PE").strip().upper(),
             "latitude": data.get("latitude"),
             "longitude": data.get("longitude"),
             "coverage_cities": normalize_coverage_cities(data.get("coverage_cities", [])),
@@ -218,6 +194,7 @@ class InMemoryDomainRepository:
             current = self.bases[base_id]
             current["name"] = data["name"].strip()
             current["city"] = data["city"].strip()
+            current["uf"] = data.get("uf", current.get("uf", "PE")).strip().upper()
             current["latitude"] = data.get("latitude")
             current["longitude"] = data.get("longitude")
             current["coverage_cities"] = normalize_coverage_cities(data.get("coverage_cities", []))
@@ -228,27 +205,6 @@ class InMemoryDomainRepository:
             return False
         async with self.lock:
             return self.bases.pop(base_id, None) is not None
-
-    async def list_functions(self) -> list[dict]:
-        async with self.lock:
-            return sorted(self.functions.values(), key=lambda item: item["label"])
-
-    async def create_function(self, data: dict) -> dict:
-        function = {"id": data["id"].strip(), "label": data["label"].strip()}
-        async with self.lock:
-            self.functions[function["id"]] = function
-            return dict(function)
-
-    async def update_function(self, function_id: str, data: dict) -> dict | None:
-        async with self.lock:
-            if function_id not in self.functions:
-                return None
-            self.functions[function_id]["label"] = data["label"].strip()
-            return dict(self.functions[function_id])
-
-    async def delete_function(self, function_id: str) -> bool:
-        async with self.lock:
-            return self.functions.pop(function_id, None) is not None
 
     async def get_profile(self, username: str) -> dict | None:
         async with self.lock:
@@ -264,7 +220,7 @@ class InMemoryDomainRepository:
             "callsign": callsign,
             "operational_name": data["operational_name"].strip(),
             "base_id": data["base_id"].strip(),
-            "function": data["function"].strip(),
+            "function": (data.get("function") or "").strip(),
             "contact": data["contact"].strip(),
             "status": data["status"].strip(),
             "connection_status": data.get("connection_status", "offline"),
@@ -524,7 +480,6 @@ class PostgresDomainRepository:
             create_operation_members_table,
             create_operation_status_events_table,
             create_operations_table,
-            create_operator_functions_table,
             create_operator_profiles_table,
         )
         from sqlalchemy.ext.asyncio import create_async_engine
@@ -532,7 +487,6 @@ class PostgresDomainRepository:
         self.engine = create_async_engine(database_url)
         self.bases = create_bases_table()
         self.coverage_cities = create_base_coverage_cities_table()
-        self.functions = create_operator_functions_table()
         self.profiles = create_operator_profiles_table()
         self.occurrences = create_occurrences_table()
         self.operations = create_operations_table()
@@ -546,6 +500,7 @@ class PostgresDomainRepository:
             await connection.run_sync(metadata.create_all)
             await connection.exec_driver_sql("ALTER TABLE bases ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION")
             await connection.exec_driver_sql("ALTER TABLE bases ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION")
+            await connection.exec_driver_sql("ALTER TABLE bases ADD COLUMN IF NOT EXISTS uf VARCHAR(2) DEFAULT 'PE'")
             await connection.exec_driver_sql("ALTER TABLE operator_profiles ADD COLUMN IF NOT EXISTS full_name VARCHAR(160)")
             await connection.exec_driver_sql("ALTER TABLE operator_profiles ADD COLUMN IF NOT EXISTS callsign VARCHAR(40)")
             await connection.exec_driver_sql("ALTER TABLE operator_profiles ADD COLUMN IF NOT EXISTS connection_status VARCHAR(40) DEFAULT 'offline'")
@@ -563,6 +518,7 @@ class PostgresDomainRepository:
                         id=DEFAULT_BASE["id"],
                         name=DEFAULT_BASE["name"],
                         city=DEFAULT_BASE["city"],
+                        uf=DEFAULT_BASE["uf"],
                         latitude=DEFAULT_BASE["latitude"],
                         longitude=DEFAULT_BASE["longitude"],
                     )
@@ -572,6 +528,7 @@ class PostgresDomainRepository:
                     self.bases.update()
                     .where(self.bases.c.id == DEFAULT_BASE["id"])
                     .values(
+                        uf=DEFAULT_BASE["uf"],
                         latitude=DEFAULT_BASE["latitude"],
                         longitude=DEFAULT_BASE["longitude"],
                     )
@@ -583,12 +540,6 @@ class PostgresDomainRepository:
                     DEFAULT_BASE["id"],
                     DEFAULT_BASE["coverage_cities"],
                 )
-            for function in DEFAULT_FUNCTIONS:
-                existing_function = await connection.execute(
-                    self.functions.select().where(self.functions.c.id == function["id"])
-                )
-                if existing_function.mappings().one_or_none() is None:
-                    await connection.execute(self.functions.insert().values(**function))
 
     async def close(self):
         await self.engine.dispose()
@@ -609,6 +560,7 @@ class PostgresDomainRepository:
             "id": data["id"].strip(),
             "name": data["name"].strip(),
             "city": data["city"].strip(),
+            "uf": data.get("uf", "PE").strip().upper(),
             "latitude": data.get("latitude"),
             "longitude": data.get("longitude"),
         }
@@ -624,6 +576,7 @@ class PostgresDomainRepository:
         values = {
             "name": data["name"].strip(),
             "city": data["city"].strip(),
+            "uf": data.get("uf", "PE").strip().upper(),
             "latitude": data.get("latitude"),
             "longitude": data.get("longitude"),
         }
@@ -667,39 +620,6 @@ class PostgresDomainRepository:
                 self.coverage_cities.insert().values(base_id=base_id, city=city)
             )
 
-    async def list_functions(self) -> list[dict]:
-        from sqlalchemy import select
-
-        async with self.engine.connect() as connection:
-            result = await connection.execute(select(self.functions).order_by(self.functions.c.label))
-            rows = result.mappings().all()
-        return [dict(row) for row in rows]
-
-    async def create_function(self, data: dict) -> dict:
-        values = {"id": data["id"].strip(), "label": data["label"].strip()}
-        async with self.engine.begin() as connection:
-            await connection.execute(self.functions.insert().values(**values))
-        return values
-
-    async def update_function(self, function_id: str, data: dict) -> dict | None:
-        from sqlalchemy import update
-
-        values = {"label": data["label"].strip()}
-        async with self.engine.begin() as connection:
-            result = await connection.execute(
-                update(self.functions).where(self.functions.c.id == function_id).values(**values)
-            )
-        if result.rowcount == 0:
-            return None
-        return {"id": function_id, **values}
-
-    async def delete_function(self, function_id: str) -> bool:
-        async with self.engine.begin() as connection:
-            result = await connection.execute(
-                self.functions.delete().where(self.functions.c.id == function_id)
-            )
-        return result.rowcount > 0
-
     async def get_profile(self, username: str) -> dict | None:
         async with self.engine.connect() as connection:
             result = await connection.execute(
@@ -720,7 +640,7 @@ class PostgresDomainRepository:
             "callsign": callsign,
             "operational_name": data["operational_name"].strip(),
             "base_id": data["base_id"].strip(),
-            "function": data["function"].strip(),
+            "function": (data.get("function") or "").strip(),
             "contact": data["contact"].strip(),
             "status": data["status"].strip(),
             "connection_status": data.get("connection_status", "offline"),

@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Protocol
 from uuid import uuid4
 
-from app.auth import ALLOWED_ROLES, ROLE_OPERADOR
+from app.auth import ALLOWED_ROLES, ROLE_COMANDANTE, ROLE_OPERADOR
 
 
 class InvalidInviteError(Exception):
@@ -47,12 +47,19 @@ def normalize_invite_data(data: dict) -> dict:
     role = data.get("role") or ROLE_OPERADOR
     if role not in ALLOWED_ROLES:
         role = ROLE_OPERADOR
+    base_id = (data.get("base_id") or "").strip() or None
+    uf_scope = (data.get("uf_scope") or "").strip().upper() or None
+    if role == ROLE_OPERADOR and not base_id:
+        raise InvalidInviteError()
+    if role == ROLE_COMANDANTE and not uf_scope:
+        raise InvalidInviteError()
     expires_in_hours = data.get("expires_in_hours")
     expires_at = data.get("expires_at")
     if expires_at is None and expires_in_hours:
         expires_at = datetime.now(timezone.utc) + timedelta(hours=int(expires_in_hours))
     return {
-        "base_id": data["base_id"].strip(),
+        "base_id": base_id,
+        "uf_scope": uf_scope,
         "role": role,
         "expires_at": expires_at,
     }
@@ -132,6 +139,8 @@ class PostgresInviteRepository:
 
         async with self.engine.begin() as connection:
             await connection.run_sync(metadata.create_all)
+            await connection.exec_driver_sql("ALTER TABLE invites ALTER COLUMN base_id DROP NOT NULL")
+            await connection.exec_driver_sql("ALTER TABLE invites ADD COLUMN IF NOT EXISTS uf_scope VARCHAR(2)")
 
     async def close(self):
         await self.engine.dispose()
