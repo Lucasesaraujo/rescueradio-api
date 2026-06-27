@@ -1,9 +1,9 @@
-from app.audit import AuditPublisher, NoopAuditPublisher
-from app.metrics import KAFKA_FAILURES, MESSAGES_PUBLISHED
-from app.state import MessageRepository
-from app.pubsub import PubSubService
-from app.validators import validate_incoming_message
-from app.websocket_manager import log_event
+from app.infra.messaging.audit import AuditPublisher, NoopAuditPublisher
+from app.infra.observability.metrics import KAFKA_FAILURES, MESSAGES_PUBLISHED
+from app.repositories.messages import MessageRepository
+from app.infra.messaging.pubsub import PubSubService
+from app.domain.validators import validate_incoming_message
+from app.logging import log_event
 
 
 class MessageService:
@@ -70,7 +70,7 @@ class MessageService:
                 source=source,
             )
         MESSAGES_PUBLISHED.labels(channel_id=channel_id, source=source).inc()
-        
+
         log_event(
             "message_published_pubsub",
             channel_id=channel_id,
