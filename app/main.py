@@ -61,8 +61,6 @@ from app.schemas import (
     BaseCreateRequest,
     BaseUpdateRequest,
     BootstrapAdminRequest,
-    FunctionCreateRequest,
-    FunctionUpdateRequest,
     InviteCreateRequest,
     LoginRequest,
     OccurrenceCreateRequest,
@@ -223,7 +221,6 @@ def create_app(
         {"name": "Autenticacao", "description": "Bootstrap, login, cadastro por convite e sessao."},
         {"name": "Convites", "description": "Convites de cadastro gerenciados por admin."},
         {"name": "Bases", "description": "Bases operacionais e cidades de cobertura."},
-        {"name": "Funcoes", "description": "Funcoes operacionais disponiveis para perfis."},
         {"name": "Usuarios", "description": "Gestao administrativa de usuarios e roles."},
         {"name": "Perfis", "description": "Perfil operacional do usuario autenticado."},
         {"name": "Operadores", "description": "Consulta de operadores por base, status e competencia."},
@@ -358,6 +355,17 @@ def create_app(
     async def require_base_access(user: dict, base_id: str):
         if user["role"] == ROLE_ADMIN:
             return
+        bases = await domain_repository.list_bases()
+        base = next((item for item in bases if item["id"] == base_id), None)
+        if base is None:
+            raise HTTPException(status_code=404, detail="Base nao encontrada")
+        if user["role"] == ROLE_COMANDANTE:
+            if (user.get("uf_scope") or "").upper() == (base.get("uf") or "").upper():
+                return
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Acesso restrito a UF do comandante",
+            )
         user_base_id = user.get("base_id")
         if not user_base_id:
             profile = await domain_repository.get_profile(user["username"])
@@ -372,10 +380,22 @@ def create_app(
         return bool(
             profile
             and profile.get("full_name")
-            and len(str(profile.get("full_name", "")).split()) >= 2
+            and len(str(profile.get("full_name", "")).strip()) >= 6
             and profile.get("base_id")
-            and profile.get("function")
         )
+
+    async def visible_base_ids(user: dict) -> set[str] | None:
+        if user["role"] == ROLE_ADMIN:
+            return None
+        bases = await domain_repository.list_bases()
+        if user["role"] == ROLE_COMANDANTE:
+            uf_scope = (user.get("uf_scope") or "").upper()
+            return {base["id"] for base in bases if (base.get("uf") or "").upper() == uf_scope}
+        user_base_id = user.get("base_id")
+        if not user_base_id:
+            profile = await domain_repository.get_profile(user["username"])
+            user_base_id = profile.get("base_id") if profile else None
+        return {user_base_id} if user_base_id else set()
 
     async def users_from_usernames(usernames: list[str]) -> list[dict]:
         users = []
@@ -388,12 +408,12 @@ def create_app(
     async def require_members_in_user_base(current_user: dict, member_users: list[dict]):
         if current_user["role"] == ROLE_ADMIN:
             return
-        base_id = current_user.get("base_id")
+        allowed_bases = await visible_base_ids(current_user)
         for member in member_users:
-            if member.get("base_id") != base_id:
+            if member.get("base_id") not in (allowed_bases or set()):
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Operador pertence a outra base",
+                    detail="Operador fora do escopo operacional",
                 )
 
     async def notify_operation_assigned(operation: dict, member_users: list[dict], assigned_by: str):
@@ -449,6 +469,7 @@ def create_app(
                 request.display_name,
                 invite["role"],
                 invite["base_id"],
+                invite.get("uf_scope"),
             )
         except DuplicateUserError as error:
             AUTH_EVENTS.labels(result="duplicate_register").inc()
@@ -528,14 +549,22 @@ def create_app(
 
     @app.get("/bases", tags=["Bases"])
     async def list_bases(current_user: dict = Depends(get_current_user)):
-        return await domain_repository.list_bases()
+        bases = await domain_repository.list_bases()
+        allowed = await visible_base_ids(current_user)
+        if allowed is None:
+            return bases
+        return [base for base in bases if base["id"] in allowed]
 
     @app.post("/bases", status_code=status.HTTP_201_CREATED, tags=["Bases"])
     async def create_base(
         request: BaseCreateRequest,
         current_user: dict = Depends(get_current_user),
     ):
-        require_role(current_user, {"admin"})
+        require_role(current_user, {"admin", "comandante"})
+        if current_user["role"] == ROLE_COMANDANTE:
+            data = request.model_dump()
+            data["uf"] = current_user.get("uf_scope")
+            return await domain_repository.create_base(data)
         return await domain_repository.create_base(request.model_dump())
 
     @app.patch("/bases/{base_id}", tags=["Bases"])
@@ -544,7 +573,15 @@ def create_app(
         request: BaseUpdateRequest,
         current_user: dict = Depends(get_current_user),
     ):
-        require_role(current_user, {"admin"})
+        require_role(current_user, {"admin", "comandante"})
+        if current_user["role"] == ROLE_COMANDANTE:
+            await require_base_access(current_user, base_id)
+            data = request.model_dump()
+            data["uf"] = current_user.get("uf_scope")
+            base = await domain_repository.update_base(base_id, data)
+            if base is None:
+                raise HTTPException(status_code=404, detail="Base nao encontrada")
+            return base
         base = await domain_repository.update_base(base_id, request.model_dump())
         if base is None:
             raise HTTPException(status_code=404, detail="Base nao encontrada")
@@ -555,49 +592,12 @@ def create_app(
         base_id: str,
         current_user: dict = Depends(get_current_user),
     ):
-        require_role(current_user, {"admin"})
+        require_role(current_user, {"admin", "comandante"})
+        if current_user["role"] == ROLE_COMANDANTE:
+            await require_base_access(current_user, base_id)
         deleted = await domain_repository.delete_base(base_id)
         if not deleted:
             raise HTTPException(status_code=400, detail="Base nao pode ser excluida")
-        return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-    @app.get("/functions", tags=["Funcoes"])
-    async def list_functions(current_user: dict = Depends(get_current_user)):
-        return await domain_repository.list_functions()
-
-    @app.post("/functions", status_code=status.HTTP_201_CREATED, tags=["Funcoes"])
-    async def create_function(
-        request: FunctionCreateRequest,
-        current_user: dict = Depends(get_current_user),
-    ):
-        require_role(current_user, {"admin"})
-        return await domain_repository.create_function(request.model_dump())
-
-    @app.patch("/functions/{function_id}", tags=["Funcoes"])
-    async def update_function(
-        function_id: str,
-        request: FunctionUpdateRequest,
-        current_user: dict = Depends(get_current_user),
-    ):
-        require_role(current_user, {"admin"})
-        function = await domain_repository.update_function(function_id, request.model_dump())
-        if function is None:
-            raise HTTPException(status_code=404, detail="Funcao nao encontrada")
-        return function
-
-    @app.delete(
-        "/functions/{function_id}",
-        status_code=status.HTTP_204_NO_CONTENT,
-        tags=["Funcoes"],
-    )
-    async def delete_function(
-        function_id: str,
-        current_user: dict = Depends(get_current_user),
-    ):
-        require_role(current_user, {"admin"})
-        deleted = await domain_repository.delete_function(function_id)
-        if not deleted:
-            raise HTTPException(status_code=404, detail="Funcao nao encontrada")
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.get("/invites", tags=["Convites"])
@@ -611,15 +611,19 @@ def create_app(
         current_user: dict = Depends(get_current_user),
     ):
         require_role(current_user, {"admin"})
-        invite = await invite_repository.create_invite(
-            request.model_dump(),
-            current_user["username"],
-        )
+        try:
+            invite = await invite_repository.create_invite(
+                request.model_dump(),
+                current_user["username"],
+            )
+        except InvalidInviteError as error:
+            raise HTTPException(status_code=400, detail="Convite invalido para o perfil") from error
         await audit_publisher.publish(
             "invite_created",
             {
                 "invite_id": invite["id"],
                 "base_id": invite["base_id"],
+                "uf_scope": invite.get("uf_scope"),
                 "role": invite["role"],
                 "created_by": current_user["username"],
             },
@@ -694,7 +698,16 @@ def create_app(
         current_user: dict = Depends(get_current_user),
     ):
         require_role(current_user, {"admin"})
-        user = await user_repository.update_role(username, request.role)
+        if request.role == ROLE_COMANDANTE and not request.uf_scope:
+            raise HTTPException(status_code=400, detail="Comandante exige UF de escopo")
+        if request.role == ROLE_OPERADOR and not request.base_id:
+            raise HTTPException(status_code=400, detail="Operador exige base vinculada")
+        user = await user_repository.update_role(
+            username,
+            request.role,
+            request.base_id,
+            request.uf_scope,
+        )
         if user is None:
             raise HTTPException(status_code=404, detail="Usuario nao encontrado")
         await audit_publisher.publish(
@@ -702,6 +715,8 @@ def create_app(
             {
                 "username": username,
                 "role": request.role,
+                "base_id": request.base_id,
+                "uf_scope": request.uf_scope,
                 "updated_by": current_user["username"],
             },
         )
@@ -725,6 +740,8 @@ def create_app(
         locked_base_id = current_user.get("base_id")
         if current_user["role"] != ROLE_ADMIN and locked_base_id:
             data["base_id"] = locked_base_id
+        if current_user["role"] != ROLE_ADMIN:
+            await require_base_access(current_user, data["base_id"])
         profile = await domain_repository.upsert_profile(
             current_user["username"],
             data,
@@ -752,10 +769,9 @@ def create_app(
         current_user: dict = Depends(get_current_user),
     ):
         if current_user["role"] != ROLE_ADMIN:
-            base_id = current_user.get("base_id")
-            if not base_id:
-                profile = await domain_repository.get_profile(current_user["username"])
-                base_id = profile.get("base_id") if profile else None
+            allowed = await visible_base_ids(current_user)
+            operators = await domain_repository.list_operator_profiles(None, status, skill)
+            return [operator for operator in operators if operator.get("base_id") in (allowed or set())]
         return await domain_repository.list_operator_profiles(base_id, status, skill)
 
     @app.post("/occurrences", status_code=status.HTTP_201_CREATED, tags=["Ocorrencias"])
@@ -786,8 +802,9 @@ def create_app(
         current_user: dict = Depends(get_current_user),
     ):
         if current_user["role"] != ROLE_ADMIN:
-            profile = await domain_repository.get_profile(current_user["username"])
-            base_id = current_user.get("base_id") or (profile.get("base_id") if profile else base_id)
+            allowed = await visible_base_ids(current_user)
+            occurrences = await domain_repository.list_occurrences(status, None)
+            return [item for item in occurrences if item.get("base_id") in (allowed or set())]
         return await domain_repository.list_occurrences(status, base_id)
 
     @app.post("/operations", status_code=status.HTTP_201_CREATED, tags=["Operacoes"])
@@ -828,8 +845,9 @@ def create_app(
         current_user: dict = Depends(get_current_user),
     ):
         if current_user["role"] != ROLE_ADMIN:
-            profile = await domain_repository.get_profile(current_user["username"])
-            base_id = current_user.get("base_id") or (profile.get("base_id") if profile else base_id)
+            allowed = await visible_base_ids(current_user)
+            operations = await domain_repository.list_operations(status, None)
+            return [item for item in operations if item.get("base_id") in (allowed or set())]
         return await domain_repository.list_operations(status, base_id)
 
     @app.get("/operations/{operation_id}", tags=["Operacoes"])

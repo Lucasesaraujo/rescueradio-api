@@ -25,6 +25,7 @@ class UserRepository(Protocol):
         display_name: str | None = None,
         role: str = ROLE_OPERADOR,
         base_id: str | None = None,
+        uf_scope: str | None = None,
     ) -> dict:
         ...
 
@@ -34,7 +35,13 @@ class UserRepository(Protocol):
     async def list_users(self) -> list[dict]:
         ...
 
-    async def update_role(self, username: str, role: str) -> dict | None:
+    async def update_role(
+        self,
+        username: str,
+        role: str,
+        base_id: str | None = None,
+        uf_scope: str | None = None,
+    ) -> dict | None:
         ...
 
     async def update_identity(
@@ -42,6 +49,7 @@ class UserRepository(Protocol):
         username: str,
         display_name: str | None = None,
         base_id: str | None = None,
+        uf_scope: str | None = None,
     ) -> dict | None:
         ...
 
@@ -67,6 +75,7 @@ class InMemoryUserRepository:
         display_name: str | None = None,
         role: str = ROLE_OPERADOR,
         base_id: str | None = None,
+        uf_scope: str | None = None,
     ) -> dict:
         if role not in ALLOWED_ROLES:
             raise InvalidRoleError(role)
@@ -81,6 +90,7 @@ class InMemoryUserRepository:
                 "password_hash": hash_password(password),
                 "role": role,
                 "base_id": base_id.strip() if base_id else None,
+                "uf_scope": uf_scope.strip().upper() if uf_scope else None,
             }
             self.users[normalized_username] = user
             return dict(user)
@@ -100,7 +110,13 @@ class InMemoryUserRepository:
                 )
             ]
 
-    async def update_role(self, username: str, role: str) -> dict | None:
+    async def update_role(
+        self,
+        username: str,
+        role: str,
+        base_id: str | None = None,
+        uf_scope: str | None = None,
+    ) -> dict | None:
         if role not in ALLOWED_ROLES:
             raise InvalidRoleError(role)
 
@@ -111,6 +127,8 @@ class InMemoryUserRepository:
                 return None
 
             user["role"] = role
+            user["base_id"] = base_id.strip() if base_id else None
+            user["uf_scope"] = uf_scope.strip().upper() if uf_scope else None
             return dict(user)
 
     async def update_identity(
@@ -118,6 +136,7 @@ class InMemoryUserRepository:
         username: str,
         display_name: str | None = None,
         base_id: str | None = None,
+        uf_scope: str | None = None,
     ) -> dict | None:
         async with self.lock:
             user = self.users.get(username.strip())
@@ -127,6 +146,8 @@ class InMemoryUserRepository:
                 user["display_name"] = display_name.strip()
             if base_id is not None:
                 user["base_id"] = base_id.strip() or None
+            if uf_scope is not None:
+                user["uf_scope"] = uf_scope.strip().upper() or None
             return dict(user)
 
     async def has_admin(self) -> bool:
@@ -151,6 +172,7 @@ class PostgresUserRepository:
         async with self.engine.begin() as connection:
             await connection.run_sync(metadata.create_all)
             await connection.exec_driver_sql("ALTER TABLE users ADD COLUMN IF NOT EXISTS base_id VARCHAR(80)")
+            await connection.exec_driver_sql("ALTER TABLE users ADD COLUMN IF NOT EXISTS uf_scope VARCHAR(2)")
 
     async def create_user(
         self,
@@ -159,6 +181,7 @@ class PostgresUserRepository:
         display_name: str | None = None,
         role: str = ROLE_OPERADOR,
         base_id: str | None = None,
+        uf_scope: str | None = None,
     ) -> dict:
         from sqlalchemy import text
 
@@ -168,9 +191,11 @@ class PostgresUserRepository:
         normalized_username = username.strip()
         normalized_display_name = (display_name or normalized_username).strip()
         normalized_base_id = base_id.strip() if base_id else None
+        normalized_uf_scope = uf_scope.strip().upper() if uf_scope else None
 
         async with self.engine.begin() as connection:
             await connection.exec_driver_sql("ALTER TABLE users ADD COLUMN IF NOT EXISTS base_id VARCHAR(80)")
+            await connection.exec_driver_sql("ALTER TABLE users ADD COLUMN IF NOT EXISTS uf_scope VARCHAR(2)")
             await connection.execute(text("LOCK TABLE users IN EXCLUSIVE MODE"))
 
             insert_statement = (
@@ -181,6 +206,7 @@ class PostgresUserRepository:
                     password_hash=hash_password(password),
                     role=role,
                     base_id=normalized_base_id,
+                    uf_scope=normalized_uf_scope,
                 )
                 .returning(
                     self.users.c.username,
@@ -188,6 +214,7 @@ class PostgresUserRepository:
                     self.users.c.password_hash,
                     self.users.c.role,
                     self.users.c.base_id,
+                    self.users.c.uf_scope,
                 )
             )
 
@@ -207,6 +234,7 @@ class PostgresUserRepository:
             self.users.c.password_hash,
             self.users.c.role,
             self.users.c.base_id,
+            self.users.c.uf_scope,
         ).where(self.users.c.username == username.strip())
 
         async with self.engine.connect() as connection:
@@ -224,6 +252,7 @@ class PostgresUserRepository:
             self.users.c.password_hash,
             self.users.c.role,
             self.users.c.base_id,
+            self.users.c.uf_scope,
         ).order_by(self.users.c.username)
 
         async with self.engine.connect() as connection:
@@ -232,20 +261,31 @@ class PostgresUserRepository:
 
         return [dict(row) for row in rows]
 
-    async def update_role(self, username: str, role: str) -> dict | None:
+    async def update_role(
+        self,
+        username: str,
+        role: str,
+        base_id: str | None = None,
+        uf_scope: str | None = None,
+    ) -> dict | None:
         if role not in ALLOWED_ROLES:
             raise InvalidRoleError(role)
 
         update_statement = (
             self.users.update()
             .where(self.users.c.username == username.strip())
-            .values(role=role)
+            .values(
+                role=role,
+                base_id=base_id.strip() if base_id else None,
+                uf_scope=uf_scope.strip().upper() if uf_scope else None,
+            )
             .returning(
                 self.users.c.username,
                 self.users.c.display_name,
                 self.users.c.password_hash,
                 self.users.c.role,
                 self.users.c.base_id,
+                self.users.c.uf_scope,
             )
         )
 
@@ -260,12 +300,15 @@ class PostgresUserRepository:
         username: str,
         display_name: str | None = None,
         base_id: str | None = None,
+        uf_scope: str | None = None,
     ) -> dict | None:
         values = {}
         if display_name is not None:
             values["display_name"] = display_name.strip()
         if base_id is not None:
             values["base_id"] = base_id.strip() or None
+        if uf_scope is not None:
+            values["uf_scope"] = uf_scope.strip().upper() or None
         if not values:
             return await self.get_by_username(username)
 
@@ -279,6 +322,7 @@ class PostgresUserRepository:
                 self.users.c.password_hash,
                 self.users.c.role,
                 self.users.c.base_id,
+                self.users.c.uf_scope,
             )
         )
         async with self.engine.begin() as connection:
