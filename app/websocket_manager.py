@@ -1,7 +1,10 @@
+import asyncio
 import json
 import logging
 
 from fastapi import WebSocket
+
+from app.metrics import ACTIVE_CONNECTIONS
 
 
 logger = logging.getLogger(__name__)
@@ -21,6 +24,7 @@ def log_event(event: str, **fields):
 class WebSocketConnectionManager:
     def __init__(self):
         self.connections: dict[str, dict[str, WebSocket]] = {}
+        self.lock = asyncio.Lock()
 
     def ensure_channel(self, channel_id: str):
         if channel_id not in self.connections:
@@ -32,8 +36,9 @@ class WebSocketConnectionManager:
         usuario: str,
         websocket: WebSocket,
     ):
-        self.ensure_channel(channel_id)
-        old_connection = self.connections[channel_id].get(usuario)
+        async with self.lock:
+            self.ensure_channel(channel_id)
+            old_connection = self.connections[channel_id].get(usuario)
 
         if old_connection is not None:
             try:
@@ -46,31 +51,40 @@ class WebSocketConnectionManager:
                 )
 
         await websocket.accept()
-        self.connections[channel_id][usuario] = websocket
+        async with self.lock:
+            self.ensure_channel(channel_id)
+            self.connections[channel_id][usuario] = websocket
+            active_connections = len(self.connections[channel_id])
+            ACTIVE_CONNECTIONS.labels(channel_id=channel_id).set(active_connections)
+
         log_event(
             "websocket_connected",
             channel_id=channel_id,
             usuario=usuario,
-            active_connections=len(self.connections[channel_id]),
+            active_connections=active_connections,
         )
 
-    def disconnect(
+    async def disconnect(
         self,
         channel_id: str,
         usuario: str,
         websocket: WebSocket,
     ) -> bool:
-        current_connection = self.connections.get(channel_id, {}).get(usuario)
+        async with self.lock:
+            current_connection = self.connections.get(channel_id, {}).get(usuario)
 
-        if current_connection != websocket:
-            return False
+            if current_connection != websocket:
+                return False
 
-        self.connections[channel_id].pop(usuario, None)
+            self.connections[channel_id].pop(usuario, None)
+            active_connections = len(self.connections[channel_id])
+            ACTIVE_CONNECTIONS.labels(channel_id=channel_id).set(active_connections)
+
         log_event(
             "websocket_disconnected",
             channel_id=channel_id,
             usuario=usuario,
-            active_connections=len(self.connections[channel_id]),
+            active_connections=active_connections,
         )
         return True
 
@@ -87,9 +101,10 @@ class WebSocketConnectionManager:
         message: dict,
         exclude_usuario: str | None = None,
     ) -> int:
-        channel_connections = list(
-            self.connections.get(channel_id, {}).items()
-        )
+        async with self.lock:
+            channel_connections = list(
+                self.connections.get(channel_id, {}).items()
+            )
         disconnected_users = []
         sent_count = 0
 
@@ -104,12 +119,18 @@ class WebSocketConnectionManager:
                 disconnected_users.append(usuario)
 
         for usuario in disconnected_users:
-            self.connections[channel_id].pop(usuario, None)
+            async with self.lock:
+                self.connections.get(channel_id, {}).pop(usuario, None)
+                active_connections = len(self.connections.get(channel_id, {}))
+                ACTIVE_CONNECTIONS.labels(channel_id=channel_id).set(
+                    active_connections
+                )
+
             log_event(
                 "websocket_removed_broken_connection",
                 channel_id=channel_id,
                 usuario=usuario,
-                active_connections=len(self.connections[channel_id]),
+                active_connections=active_connections,
             )
 
         log_event(
