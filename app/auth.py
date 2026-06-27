@@ -61,6 +61,7 @@ def create_access_token(user: dict) -> str:
         "display_name": user["display_name"],
         "role": user["role"],
         "base_id": user.get("base_id"),
+        "uf_scope": user.get("uf_scope"),
         "exp": expires_at,
     }
     return jwt.encode(payload, get_jwt_secret(), algorithm="HS256")
@@ -76,4 +77,5 @@ def public_user(user: dict) -> dict:
         "display_name": user["display_name"],
         "role": user["role"],
         "base_id": user.get("base_id"),
+        "uf_scope": user.get("uf_scope"),
     }

@@ -107,7 +107,7 @@ def test_admin_promotes_user_and_commander_creates_and_closes_operation():
 
         promote = client.patch(
             "/users/cmd/role",
-            json={"role": "comandante"},
+            json={"role": "comandante", "uf_scope": "PE"},
             headers=auth(admin_token),
         )
         assert promote.status_code == 200
