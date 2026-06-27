@@ -4,7 +4,7 @@ import os
 from datetime import datetime, timezone
 from typing import Protocol
 
-from app.metrics import KAFKA_FAILURES
+from app.infra.observability.metrics import KAFKA_FAILURES
 
 
 logger = logging.getLogger(__name__)

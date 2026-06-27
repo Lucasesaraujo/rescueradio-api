@@ -2,9 +2,9 @@ import asyncio
 import json
 import logging
 
-from app.message_service import MessageService
-from app.metrics import UDP_EVENTS
-from app.validators import validate_udp_datagram
+from app.services.message_service import MessageService
+from app.infra.observability.metrics import UDP_EVENTS
+from app.domain.validators import validate_udp_datagram
 
 
 logger = logging.getLogger(__name__)
