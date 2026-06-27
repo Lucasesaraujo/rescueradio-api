@@ -1,4 +1,5 @@
 import pytest
+import asyncio
 
 from app.state import InMemoryMessageRepository
 
@@ -34,3 +35,19 @@ async def test_in_memory_message_repository_isolates_channels():
 
     assert await repository.get_briefing("canal-geral") == []
     assert len(await repository.get_briefing("canal-alfa")) == 1
+
+
+@pytest.mark.anyio
+async def test_in_memory_message_repository_handles_concurrent_writes():
+    repository = InMemoryMessageRepository(buffer_size=200)
+
+    await asyncio.gather(
+        *[
+            repository.add_message("canal-geral", valid_message(index))
+            for index in range(100)
+        ]
+    )
+
+    briefing = await repository.get_briefing("canal-geral")
+
+    assert len(briefing) == 100

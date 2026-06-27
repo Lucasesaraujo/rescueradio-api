@@ -5,7 +5,7 @@ import socket
 from fastapi.testclient import TestClient
 
 from app.main import create_app
-from tests.test_websocket import receive_initial_events
+from tests.test_websocket import receive_initial_events, register_and_login, websocket_path
 
 
 def udp_message(channel_id: str = "canal-geral") -> dict:
@@ -41,7 +41,7 @@ async def wait_for_briefing(
         await asyncio.sleep(0.01)
 
     raise AssertionError(
-        f"Briefing de {channel_id} não atingiu {expected_size} mensagem(ns)"
+        f"Briefing de {channel_id} nao atingiu {expected_size} mensagem(ns)"
     )
 
 
@@ -49,9 +49,9 @@ def test_forwards_udp_message_to_websocket_client():
     app = create_app(udp_host="127.0.0.1", udp_port=0, disconnect_grace_seconds=0)
 
     with TestClient(app) as client:
-        with client.websocket_connect(
-            "/ws/channel/canal-geral?usuario=Lucas"
-        ) as websocket:
+        token = register_and_login(client, "lucas", "Lucas")
+
+        with client.websocket_connect(websocket_path(token)) as websocket:
             receive_initial_events(websocket)
             send_datagram(
                 app.state.udp_port,
@@ -126,4 +126,4 @@ def test_drops_datagram_when_queue_is_full(caplog):
             ("127.0.0.1", 1234),
         )
 
-        assert "fila de publicação cheia" in caplog.text
+        assert "fila de publicacao cheia" in caplog.text

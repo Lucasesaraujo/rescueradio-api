@@ -5,3 +5,6 @@ websockets==16.0
 sqlalchemy[asyncio]==2.0.36
 asyncpg==0.30.0
 redis==5.2.1
+PyJWT==2.10.1
+prometheus-client==0.21.1
+aiokafka==0.12.0

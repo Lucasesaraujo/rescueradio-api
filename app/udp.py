@@ -3,6 +3,7 @@ import json
 import logging
 
 from app.message_service import MessageService
+from app.metrics import UDP_EVENTS
 from app.validators import validate_udp_datagram
 
 
@@ -33,12 +34,14 @@ class UdpMessageProtocol(asyncio.DatagramProtocol):
         try:
             payload = json.loads(data.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            logger.warning("Datagrama UDP inválido de %s: %s", addr, error)
+            UDP_EVENTS.labels(result="invalid_json").inc()
+            logger.warning("Datagrama UDP invalido de %s: %s", addr, error)
             return
 
         is_valid, result = validate_udp_datagram(payload)
 
         if not is_valid:
+            UDP_EVENTS.labels(result="rejected").inc()
             logger.warning("Datagrama UDP rejeitado de %s: %s", addr, result)
             return
 
@@ -47,8 +50,9 @@ class UdpMessageProtocol(asyncio.DatagramProtocol):
         try:
             self.queue.put_nowait((channel_id, message, addr))
         except asyncio.QueueFull:
+            UDP_EVENTS.labels(result="queue_full").inc()
             logger.warning(
-                "Datagrama UDP descartado de %s: fila de publicação cheia",
+                "Datagrama UDP descartado de %s: fila de publicacao cheia",
                 addr,
             )
 
@@ -60,14 +64,18 @@ class UdpMessageProtocol(asyncio.DatagramProtocol):
                 is_valid, result = await self.message_service.publish(
                     channel_id,
                     message,
+                    source="udp",
                 )
 
                 if not is_valid:
+                    UDP_EVENTS.labels(result="rejected_message").inc()
                     logger.warning(
                         "Mensagem UDP rejeitada de %s: %s",
                         addr,
                         result,
                     )
+                else:
+                    UDP_EVENTS.labels(result="published").inc()
             except Exception:
                 logger.exception(
                     "Falha inesperada ao publicar datagrama UDP de %s",
