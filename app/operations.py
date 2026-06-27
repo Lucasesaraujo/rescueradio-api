@@ -49,6 +49,14 @@ def normalize_coverage_cities(cities: list[str]) -> list[str]:
     return normalized
 
 
+def invalid_coordinate(latitude: float | None, longitude: float | None) -> bool:
+    if latitude is None or longitude is None:
+        return True
+    if abs(float(latitude)) < 0.0001 and abs(float(longitude)) < 0.0001:
+        return True
+    return not (-90 <= float(latitude) <= 90 and -180 <= float(longitude) <= 180)
+
+
 def derive_display_name(full_name: str) -> str:
     parts = [part for part in full_name.strip().split() if part]
     if len(parts) <= 1:
@@ -548,12 +556,22 @@ class PostgresDomainRepository:
             existing = await connection.execute(
                 self.bases.select().where(self.bases.c.id == DEFAULT_BASE["id"])
             )
-            if existing.mappings().one_or_none() is None:
+            existing_base = existing.mappings().one_or_none()
+            if existing_base is None:
                 await connection.execute(
                     self.bases.insert().values(
                         id=DEFAULT_BASE["id"],
                         name=DEFAULT_BASE["name"],
                         city=DEFAULT_BASE["city"],
+                        latitude=DEFAULT_BASE["latitude"],
+                        longitude=DEFAULT_BASE["longitude"],
+                    )
+                )
+            elif invalid_coordinate(existing_base.get("latitude"), existing_base.get("longitude")):
+                await connection.execute(
+                    self.bases.update()
+                    .where(self.bases.c.id == DEFAULT_BASE["id"])
+                    .values(
                         latitude=DEFAULT_BASE["latitude"],
                         longitude=DEFAULT_BASE["longitude"],
                     )
