@@ -2,7 +2,7 @@ from datetime import datetime
 
 from pydantic import ValidationError
 
-from app.schemas import IncomingMessage, UdpDatagram
+from app.domain.schemas import IncomingMessage, UdpDatagram
 
 
 ALLOWED_MESSAGE_TYPES = {
