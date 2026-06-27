@@ -35,6 +35,9 @@ class UserRepository(Protocol):
     async def list_users(self) -> list[dict]:
         ...
 
+    async def delete_user(self, username: str) -> bool:
+        ...
+
     async def update_role(
         self,
         username: str,
@@ -109,6 +112,10 @@ class InMemoryUserRepository:
                     key=lambda item: item["username"],
                 )
             ]
+
+    async def delete_user(self, username: str) -> bool:
+        async with self.lock:
+            return self.users.pop(username.strip(), None) is not None
 
     async def update_role(
         self,
@@ -260,6 +267,12 @@ class PostgresUserRepository:
             rows = result.mappings().all()
 
         return [dict(row) for row in rows]
+
+    async def delete_user(self, username: str) -> bool:
+        delete_statement = self.users.delete().where(self.users.c.username == username.strip())
+        async with self.engine.begin() as connection:
+            result = await connection.execute(delete_statement)
+        return result.rowcount > 0
 
     async def update_role(
         self,

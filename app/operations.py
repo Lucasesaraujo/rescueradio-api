@@ -81,6 +81,9 @@ class DomainRepository(Protocol):
     async def get_profile(self, username: str) -> dict | None:
         ...
 
+    async def delete_profile(self, username: str) -> bool:
+        ...
+
     async def upsert_profile(self, username: str, data: dict) -> dict:
         ...
 
@@ -210,6 +213,10 @@ class InMemoryDomainRepository:
         async with self.lock:
             profile = self.profiles.get(username)
             return self._profile_dict(profile) if profile else None
+
+    async def delete_profile(self, username: str) -> bool:
+        async with self.lock:
+            return self.profiles.pop(username, None) is not None
 
     async def upsert_profile(self, username: str, data: dict) -> dict:
         full_name = (data.get("full_name") or data["operational_name"]).strip()
@@ -629,6 +636,13 @@ class PostgresDomainRepository:
             )
             row = result.mappings().one_or_none()
         return self._profile_dict(row) if row else None
+
+    async def delete_profile(self, username: str) -> bool:
+        async with self.engine.begin() as connection:
+            result = await connection.execute(
+                self.profiles.delete().where(self.profiles.c.username == username)
+            )
+        return result.rowcount > 0
 
     async def upsert_profile(self, username: str, data: dict) -> dict:
         from sqlalchemy.dialects.postgresql import insert
