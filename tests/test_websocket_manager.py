@@ -1,6 +1,6 @@
 import asyncio
 
-from app.websocket_manager import WebSocketConnectionManager
+from app.infra.transport.websocket_manager import WebSocketConnectionManager
 
 
 class WorkingConnection:

@@ -1,4 +1,4 @@
-from app.validators import validate_incoming_message, validate_udp_datagram
+from app.domain.validators import validate_incoming_message, validate_udp_datagram
 
 
 def valid_message() -> dict:

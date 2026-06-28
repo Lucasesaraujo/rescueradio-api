@@ -5,7 +5,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Protocol
 from uuid import uuid4
 
-from app.auth import ALLOWED_ROLES, ROLE_COMANDANTE, ROLE_OPERADOR
+from sqlalchemy.ext.asyncio import AsyncEngine
+
+from app.domain.auth import ALLOWED_ROLES, ROLE_COMANDANTE, ROLE_OPERADOR
 
 
 class InvalidInviteError(Exception):
@@ -57,12 +59,7 @@ def normalize_invite_data(data: dict) -> dict:
     expires_at = data.get("expires_at")
     if expires_at is None and expires_in_hours:
         expires_at = datetime.now(timezone.utc) + timedelta(hours=int(expires_in_hours))
-    return {
-        "base_id": base_id,
-        "uf_scope": uf_scope,
-        "role": role,
-        "expires_at": expires_at,
-    }
+    return {"base_id": base_id, "uf_scope": uf_scope, "role": role, "expires_at": expires_at}
 
 
 def invite_is_active(invite: dict) -> bool:
@@ -105,7 +102,10 @@ class InMemoryInviteRepository:
     async def list_invites(self) -> list[dict]:
         async with self.lock:
             invites = list(self.invites.values())
-        return [public_invite(invite) for invite in sorted(invites, key=lambda i: i["created_at"], reverse=True)]
+        return [
+            public_invite(invite)
+            for invite in sorted(invites, key=lambda i: i["created_at"], reverse=True)
+        ]
 
     async def revoke_invite(self, invite_id: str) -> bool:
         async with self.lock:
@@ -118,7 +118,10 @@ class InMemoryInviteRepository:
     async def consume_invite(self, code: str, used_by: str) -> dict:
         code_hash = hash_invite_code(code)
         async with self.lock:
-            invite = next((item for item in self.invites.values() if item["code_hash"] == code_hash), None)
+            invite = next(
+                (item for item in self.invites.values() if item["code_hash"] == code_hash),
+                None,
+            )
             if invite is None or not invite_is_active(invite):
                 raise InvalidInviteError()
             invite["used_by"] = used_by
@@ -127,15 +130,14 @@ class InMemoryInviteRepository:
 
 
 class PostgresInviteRepository:
-    def __init__(self, database_url: str):
-        from app.database import create_invites_table
-        from sqlalchemy.ext.asyncio import create_async_engine
+    def __init__(self, engine: AsyncEngine):
+        from app.infra.db.tables import create_invites_table
 
-        self.engine = create_async_engine(database_url)
+        self.engine = engine
         self.invites = create_invites_table()
 
     async def init_schema(self):
-        from app.database import metadata
+        from app.infra.db.tables import metadata
 
         async with self.engine.begin() as connection:
             await connection.run_sync(metadata.create_all)
@@ -163,7 +165,9 @@ class PostgresInviteRepository:
         from sqlalchemy import desc, select
 
         async with self.engine.connect() as connection:
-            result = await connection.execute(select(self.invites).order_by(desc(self.invites.c.created_at)))
+            result = await connection.execute(
+                select(self.invites).order_by(desc(self.invites.c.created_at))
+            )
             rows = result.mappings().all()
         return [public_invite(self._row_dict(row)) for row in rows]
 
@@ -183,11 +187,13 @@ class PostgresInviteRepository:
 
         code_hash = hash_invite_code(code)
         async with self.engine.begin() as connection:
-            result = await connection.execute(self.invites.select().where(self.invites.c.code_hash == code_hash))
-            invite = result.mappings().one_or_none()
-            if invite is None:
+            result = await connection.execute(
+                self.invites.select().where(self.invites.c.code_hash == code_hash)
+            )
+            row = result.mappings().one_or_none()
+            if row is None:
                 raise InvalidInviteError()
-            invite_dict = self._row_dict(invite)
+            invite_dict = self._row_dict(row)
             if not invite_is_active(invite_dict):
                 raise InvalidInviteError()
             await connection.execute(
@@ -201,7 +207,9 @@ class PostgresInviteRepository:
 
     async def _get_invite(self, invite_id: str) -> dict | None:
         async with self.engine.connect() as connection:
-            result = await connection.execute(self.invites.select().where(self.invites.c.id == invite_id))
+            result = await connection.execute(
+                self.invites.select().where(self.invites.c.id == invite_id)
+            )
             row = result.mappings().one_or_none()
         return self._row_dict(row) if row else None
 

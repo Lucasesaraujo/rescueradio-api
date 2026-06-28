@@ -1,9 +1,9 @@
 import pytest
 
-from app.message_service import MessageService
-from app.pubsub import InMemoryPubSubService
-from app.state import InMemoryMessageRepository
-from app.websocket_manager import WebSocketConnectionManager
+from app.services.message_service import MessageService
+from app.infra.messaging.pubsub import InMemoryPubSubService
+from app.repositories.messages import InMemoryMessageRepository
+from app.infra.transport.websocket_manager import WebSocketConnectionManager
 
 
 class FailingAuditPublisher:

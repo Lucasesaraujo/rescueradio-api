@@ -1,7 +1,7 @@
 import pytest
 import asyncio
 
-from app.state import InMemoryMessageRepository
+from app.repositories.messages import InMemoryMessageRepository
 
 
 def valid_message(index: int) -> dict:

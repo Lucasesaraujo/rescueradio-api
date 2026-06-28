@@ -1,7 +1,7 @@
 import pytest
 import asyncio
 
-from app.presence import InMemoryPresenceService
+from app.infra.cache.presence import InMemoryPresenceService
 
 
 @pytest.mark.anyio

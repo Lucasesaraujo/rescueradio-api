@@ -3,7 +3,7 @@ import json
 import logging
 from typing import Protocol
 
-from app.websocket_manager import WebSocketConnectionManager
+from app.infra.transport.websocket_manager import WebSocketConnectionManager
 
 logger = logging.getLogger(__name__)
 
