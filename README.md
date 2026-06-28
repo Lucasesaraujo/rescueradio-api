@@ -1,238 +1,322 @@
 # RescueRadio API
 
-Backend FastAPI do RescueRadio, responsavel por autenticacao, comunicacao em
-tempo real, persistencia, presenca, metricas e auditoria.
+Backend FastAPI do RescueRadio. Ele concentra a regra operacional do radio
+digital: autenticacao, usuarios, bases, perfis, ocorrencias, operacoes,
+mensagens em tempo real, briefing automatico, presenca, auditoria e metricas.
 
-## Responsabilidades
+A API foi organizada para que a GUI seja o fluxo principal da Entrega 3. O
+console/terminal deixa de ser o meio de uso diario; HTTP e WebSocket passam a
+ser as interfaces do sistema.
 
-- cadastro por convite com JWT;
-- bootstrap controlado do primeiro `admin`;
-- perfis operacionais por usuario;
-- gestao de bases, ocorrencias, operacoes e membros;
-- WebSocket autenticado por canal;
-- briefing automatico com as ultimas 50 mensagens;
-- broadcast em tempo real;
-- persistencia de mensagens e usuarios no PostgreSQL;
-- presenca online em Redis;
-- Redis Pub/Sub para broadcast entre instancias;
-- locks em estados mutaveis em memoria;
-- auditoria assincrona em Kafka;
-- endpoint `/metrics` para Prometheus.
+## Visao rapida
 
-## Desenvolvimento
+- Framework: FastAPI.
+- Banco principal: PostgreSQL, via SQLAlchemy async.
+- Presenca e fan-out entre instancias: Redis e Redis Pub/Sub.
+- Chat em tempo real: WebSocket autenticado com JWT.
+- Auditoria assincrona: Kafka, sem bloquear o caminho critico do chat.
+- Observabilidade: endpoint `/metrics` com Prometheus.
+- Fallback local: repositories em memoria quando variaveis externas nao forem
+  configuradas.
 
-Requisitos:
+## Arquitetura de pastas
 
-- Python 3.12;
-- PostgreSQL, Redis e Kafka quando as variaveis de ambiente estiverem definidas.
-
-```bash
-python -m venv .venv
-python -m pip install -r requirements-dev.txt
-python -m uvicorn app.main:app --reload
+```text
+app/
+  main.py                  # cria a aplicacao, injeta dependencias e registra routers
+  config.py                # configuracoes por variaveis de ambiente
+  dependencies.py          # autenticacao, autorizacao e dependencias FastAPI
+  domain/
+    auth.py                # roles, JWT, hash/verificacao de senha
+    schemas.py             # modelos Pydantic de entrada
+    validators.py          # validacao de mensagens/UDP
+  routes/
+    auth.py                # bootstrap, login, cadastro, /auth/me
+    bases.py               # bases operacionais
+    users.py               # gestao de usuarios e roles
+    profiles.py            # perfil operacional do usuario autenticado
+    operators.py           # consulta de operadores e presenca
+    occurrences.py         # ocorrencias
+    operations.py          # criacao, membros, fechamento e auditoria
+    channels.py            # acoes administrativas do chat
+    health.py              # healthcheck e metricas
+    websockets.py          # chat e notificacoes globais
+  repositories/
+    messages.py            # historico/briefing de mensagens
+    users.py               # usuarios e credenciais
+    invites.py             # convites de cadastro
+    bases.py               # bases
+    profiles.py            # perfis, status e ultimo visto
+    occurrences.py         # ocorrencias
+    operations.py          # operacoes, membros e eventos
+  services/
+    message_service.py     # validacao, persistencia, broadcast e auditoria de mensagens
+  infra/
+    cache/presence.py      # presenca em memoria ou Redis
+    db/                    # engine e tabelas
+    messaging/             # Kafka, notificacoes e Pub/Sub
+    observability/metrics.py
+    transport/             # UDP, WebSocket manager e desconexao com grace period
 ```
 
-Sem `DATABASE_URL`, `REDIS_URL` e `KAFKA_BOOTSTRAP_SERVERS`, a API usa
-repositorios em memoria, presenca em memoria e auditoria noop. Isso facilita
-testes locais rapidos.
+Essa divisao ajuda a explicar o sistema por responsabilidade:
 
-## Variaveis principais
+- `routes` fala HTTP/WebSocket.
+- `dependencies` decide quem pode fazer o que.
+- `services` executa casos de uso compartilhados.
+- `repositories` persistem e recuperam dados.
+- `infra` integra ferramentas externas.
+- `domain` mantem contratos e regras pequenas de dominio.
 
-| Variavel | Uso |
-| --- | --- |
-| `DATABASE_URL` | PostgreSQL para mensagens e usuarios |
-| `REDIS_URL` | Presenca e Pub/Sub |
-| `JWT_SECRET` | Assinatura dos tokens JWT |
-| `JWT_EXPIRE_MINUTES` | Expiracao do token, padrao 480 |
-| `BOOTSTRAP_ADMIN_KEY` | Chave para criar o primeiro admin, padrao `rescueradio-bootstrap` |
-| `KAFKA_BOOTSTRAP_SERVERS` | Bootstrap Kafka para auditoria |
-| `KAFKA_AUDIT_TOPIC` | Topico de auditoria, padrao `rescueradio.audit` |
-| `CORS_ALLOW_ORIGINS` | Origens liberadas para a GUI |
-| `ENABLE_UDP` | Habilita transporte UDP legado quando `true`, padrao `false` |
-| `UDP_HOST` / `UDP_PORT` | Endereco UDP legado, padrao `0.0.0.0:9000` |
+## Regras de negocio principais
 
-## Autenticacao
+### Roles
 
-Bootstrap do primeiro admin:
+- `admin`: administra o sistema todo. Gerencia usuarios, convites, bases e
+  diagnostico.
+- `comandante`: atua por UF. Cria/finaliza operacoes e gerencia membros dentro
+  da propria UF.
+- `operador`: atua na propria base e nas operacoes para as quais foi designado.
 
-```http
-POST /auth/bootstrap-admin
-Content-Type: application/json
+### Cadastro
 
-{
-  "username": "admin",
-  "password": "segredo123",
-  "display_name": "Admin",
-  "bootstrap_key": "rescueradio-bootstrap"
-}
-```
+O cadastro aberto foi removido. O fluxo correto e:
 
-Depois que existir um admin, novos cadastros exigem convite de uso unico.
-Convites sao criados por admin:
+1. Criar o primeiro admin por bootstrap.
+2. Admin cria convites.
+3. Convite define role e escopo do usuario.
+4. Usuario registra conta com o codigo do convite.
+5. Usuario completa onboarding/perfil na GUI.
 
-```http
-POST /invites
-Authorization: Bearer <token-admin>
-Content-Type: application/json
+### Canais de chat
 
-{
-  "base_id": "base-central",
-  "role": "operador",
-  "expires_in_hours": 72
-}
-```
+- Chat geral da base: `base:{base_id}:geral`.
+- Chat de operacao: `operacao:{operation_id}`.
 
-Cadastro com convite:
+Ao conectar no WebSocket, o servidor envia automaticamente um `BRIEFING` com as
+ultimas 50 mensagens persistidas do canal. Isso atende ao requisito de novo
+socorrista receber contexto imediatamente.
 
-```http
-POST /auth/register
-Content-Type: application/json
+### Operacoes
 
-{
-  "username": "lucas",
-  "password": "segredo123",
-  "display_name": "Lucas",
-  "invite_code": "codigo-do-convite"
-}
-```
+Uma operacao e criada a partir de uma ocorrencia e uma lista de membros. Quando
+finalizada:
 
-Login:
+- o chat especifico fica somente leitura;
+- novas mensagens sao rejeitadas;
+- resumo, resultado e auditoria permanecem consultaveis;
+- o historico usa `outcome` para diferenciar sucesso/falha.
 
-```http
-POST /auth/login
-Content-Type: application/json
+### Concorrencia
 
-{
-  "username": "lucas",
-  "password": "segredo123"
-}
-```
+O servidor usa locks em estados mutaveis em memoria, por exemplo:
 
-O login retorna:
+- repositories em memoria de mensagens, perfis, operacoes, convites e usuarios;
+- gerenciador de conexoes WebSocket;
+- notificacoes globais;
+- tarefas pendentes de desconexao.
+
+Em producao/local completo, PostgreSQL e Redis reduzem a dependencia de memoria
+local, mas os locks continuam importantes para testes, fallback e consistencia
+durante uso simultaneo.
+
+## Endpoints principais
+
+Autenticacao:
+
+- `POST /auth/bootstrap-admin`
+- `POST /auth/register`
+- `POST /auth/login`
+- `GET /auth/me`
+
+Usuarios, convites e perfis:
+
+- `GET /users`
+- `PATCH /users/{username}/role`
+- `DELETE /users/{username}`
+- `GET /invites`
+- `POST /invites`
+- `DELETE /invites/{invite_id}`
+- `GET /profiles/me`
+- `PUT /profiles/me`
+- `GET /operators`
+
+Bases e ocorrencias:
+
+- `GET /bases`
+- `POST /bases`
+- `PATCH /bases/{base_id}`
+- `DELETE /bases/{base_id}`
+- `POST /occurrences`
+- `GET /occurrences`
+
+Operacoes:
+
+- `POST /operations`
+- `GET /operations`
+- `GET /operations/{operation_id}`
+- `POST /operations/{operation_id}/members`
+- `POST /operations/{operation_id}/close`
+- `GET /operations/{operation_id}/audit`
+
+Chat e observabilidade:
+
+- `DELETE /channels/{channel_id}/messages`
+- `GET /health`
+- `GET /metrics`
+
+WebSockets:
+
+- `/ws/channel/{channel_id}?token={jwt}`
+- `/ws/notifications?token={jwt}`
+
+## WebSocket do chat
+
+Cliente envia:
 
 ```json
 {
-  "access_token": "...",
-  "token_type": "bearer",
-  "user": {
-    "username": "lucas",
-    "display_name": "Lucas",
-    "role": "admin"
-  }
+  "type": "SEND_MESSAGE",
+  "usuario": "ignorado-pelo-servidor",
+  "timestamp_iso": "2026-06-28T12:00:00Z",
+  "corpo_texto": "Mensagem operacional"
 }
 ```
 
-Consulta da sessao:
+O servidor usa o JWT para definir o usuario real. Eventos principais:
 
-```http
-GET /auth/me
-Authorization: Bearer <token>
-```
+- `CONNECTED`: conexao aceita e membros ativos.
+- `BRIEFING`: ultimas mensagens do canal.
+- `MESSAGE_RECEIVED`: nova mensagem retransmitida.
+- `MEMBER_JOINED`: operador entrou no canal.
+- `MEMBER_LEFT`: operador saiu do canal.
+- `CHAT_CLEARED`: admin limpou o historico do canal.
+- `ERROR`: rejeicao ou falha operacional.
 
-## WebSocket
+## WebSocket de notificacoes
 
-Endpoint:
-
-```text
-ws://localhost:8000/ws/channel/{channel_id}?token={jwt}
-```
-
-Notificacoes globais autenticadas:
+O WebSocket global fica em:
 
 ```text
 ws://localhost:8000/ws/notifications?token={jwt}
 ```
 
-Quando uma operacao e criada ou um operador e adicionado, o servidor envia
-`OPERATION_ASSIGNED` para o usuario designado conectado. O push nao substitui
-persistencia: se o operador estiver offline, a operacao aparece na listagem ao
-entrar.
+Ele envia `OPERATION_ASSIGNED` quando um operador e designado para uma
+operacao. O push e melhor esforco: se o usuario estiver offline, a operacao
+continua persistida e aparece quando a GUI listar operacoes ativas.
 
-Eventos enviados pelo servidor:
+## Configuracao
 
-- `CONNECTED`;
-- `BRIEFING`;
-- `MESSAGE_RECEIVED`;
-- `MEMBER_JOINED`;
-- `MEMBER_LEFT`;
-- `ERROR`.
+Variaveis principais:
 
-O usuario exibido no chat e derivado do JWT. Mesmo que o cliente envie outro
-`usuario` dentro do payload, o servidor substitui pelo usuario autenticado.
+| Variavel | Finalidade | Padrao |
+| --- | --- | --- |
+| `DATABASE_URL` | PostgreSQL async | vazio, usa memoria |
+| `REDIS_URL` | Presenca e Pub/Sub | vazio, usa memoria |
+| `JWT_SECRET` | Assinatura dos tokens | `rescueradio-local-secret` |
+| `JWT_EXPIRE_MINUTES` | Duracao do token | `480` |
+| `BOOTSTRAP_ADMIN_KEY` | Chave do primeiro admin | `rescueradio-bootstrap` |
+| `CORS_ALLOW_ORIGINS` | Origens permitidas | `*` |
+| `KAFKA_BOOTSTRAP_SERVERS` | Kafka para auditoria | vazio/noop |
+| `KAFKA_AUDIT_TOPIC` | Topico de auditoria | `rescueradio.audit` |
+| `DISCONNECT_GRACE_SECONDS` | Janela para reconexao rapida | `2` |
+| `ENABLE_UDP` | Liga UDP legado | `false` |
+| `UDP_HOST` / `UDP_PORT` | Endereco UDP | `0.0.0.0` / `9000` |
 
-## Dominio operacional
+## Desenvolvimento local
 
-Endpoints principais:
+Requisitos:
 
-- `GET /bases`, `POST /bases`, `PATCH /bases/{id}` e `DELETE /bases/{id}`;
-- `GET /profiles/me` e `PUT /profiles/me`;
-- `GET /operators?base_id=&status=&skill=`;
-- `GET /users` e `PATCH /users/{username}/role`;
-- `POST /occurrences` e `GET /occurrences`;
-- `POST /operations`, `GET /operations`, `GET /operations/{id}`;
-- `POST /operations/{id}/members`;
-- `POST /operations/{id}/close` com `outcome: "success" | "failure"`;
-- `GET /operations/{id}/audit`.
+- Python 3.12.
+- Opcionalmente PostgreSQL, Redis e Kafka. Sem eles, a API usa memoria.
 
-O sistema cria automaticamente a base `base-central` quando o schema e
-inicializado. Canais de chat usam:
-
-- `base:{base_id}:geral` para o chat permanente da base;
-- `operacao:{operation_id}` para o chat da operacao.
-
-Quando uma operacao e finalizada, o canal especifico passa a rejeitar novas
-mensagens e o endpoint de auditoria preserva ocorrencia, participantes,
-mensagens, eventos de status, resultado formal e resumo de encerramento.
-
-## UDP legado opcional
-
-O fluxo principal da Entrega 3 e a GUI via HTTP/WebSocket. O transporte UDP de
-entregas anteriores fica desabilitado por padrao e pode ser ligado com
-`ENABLE_UDP=true` para testes especificos. Quando habilitado, a API recebe
-datagramas JSON em `9000/udp`:
-
-```json
-{
-  "type": "SEND_MESSAGE",
-  "channel_id": "canal-geral",
-  "usuario": "Central",
-  "timestamp_iso": "2026-06-09T12:00:00Z",
-  "corpo_texto": "Mensagem enviada por UDP."
-}
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
 ```
 
-Mensagens validas entram no mesmo historico persistente e sao retransmitidas
-para clientes WebSocket do canal.
+Linux/macOS:
 
-## Observabilidade
-
-O endpoint Prometheus fica em:
-
-```text
-GET /metrics
+```bash
+python -m venv .venv
+./.venv/bin/python -m pip install -r requirements-dev.txt
+./.venv/bin/python -m uvicorn app.main:app --reload
 ```
 
-Metricas principais:
+Documentacao interativa:
 
-- `rescueradio_active_connections`;
-- `rescueradio_messages_published_total`;
-- `rescueradio_websocket_errors_total`;
-- `rescueradio_reconnections_total`;
-- `rescueradio_udp_events_total`, apenas quando o legado UDP for usado;
-- `rescueradio_kafka_failures_total`;
-- `rescueradio_auth_events_total`.
-
-Eventos de auditoria sao publicados no Kafka sem bloquear o chat. Se o Kafka
-ficar indisponivel, a falha e registrada em logs/metricas e a mensagem continua
-seguindo para o historico e para o WebSocket.
+- Swagger: <http://localhost:8000/docs>
+- Redoc: <http://localhost:8000/redoc>
+- Health: <http://localhost:8000/health>
 
 ## Testes
 
-```bash
-python -m pytest
+```powershell
+.\.venv\Scripts\python.exe -m pytest
+.\.venv\Scripts\python.exe -m pytest --cov=app --cov-report=term-missing
+```
+
+Se uma dependencia nova foi adicionada, atualize o ambiente:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 ```
 
 ## Docker
 
-Para executar a arquitetura completa com PostgreSQL, Redis, Kafka, Kong,
-Prometheus, Loki, Grafana e frontend, use o repositorio `rescueradio-infra`.
+Build local da imagem:
+
+```powershell
+docker build -t rescueradio-api:local .
+```
+
+Execucao isolada em memoria:
+
+```powershell
+docker run --rm -p 8000:8000 rescueradio-api:local
+```
+
+Para executar com PostgreSQL, Redis, Kafka, Kong, Web, Prometheus, Loki e
+Grafana, use o repositorio `rescueradio-infra`.
+
+## UDP legado
+
+O UDP existe para compatibilidade com entregas anteriores e fica desligado por
+padrao. Para testar, defina:
+
+```powershell
+$env:ENABLE_UDP="true"
+```
+
+Quando habilitado, datagramas JSON validos entram no mesmo fluxo do
+`MessageService`: validacao, persistencia, broadcast e metricas.
+
+## Observabilidade
+
+O endpoint `/metrics` expoe metricas Prometheus como:
+
+- `rescueradio_active_connections`
+- `rescueradio_messages_published_total`
+- `rescueradio_websocket_errors_total`
+- `rescueradio_reconnections_total`
+- `rescueradio_udp_events_total`
+- `rescueradio_kafka_failures_total`
+- `rescueradio_auth_events_total`
+
+Logs estruturados sao usados para eventos relevantes de WebSocket, auditoria,
+mensagens e conexoes quebradas.
+
+## Fluxo manual recomendado
+
+1. Suba o ambiente completo pelo `rescueradio-infra`.
+2. Acesse a GUI em <http://localhost:4200>.
+3. Configure o primeiro admin pelo bootstrap.
+4. Complete o perfil operacional.
+5. Crie uma base, se necessario.
+6. Gere convite para operador ou comandante.
+7. Abra outra aba/janela, cadastre o usuario convidado e complete onboarding.
+8. Envie mensagens na Central de Comunicacao.
+9. Abra nova instancia para validar briefing automatico.
+10. Reinicie a API para validar reconexao silenciosa.
+11. Crie/finalize uma operacao e confira historico/auditoria.
