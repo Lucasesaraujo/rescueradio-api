@@ -213,6 +213,27 @@ def create_operation_members_table() -> Table:
     )
 
 
+def create_operation_assignment_acks_table() -> Table:
+    existing_table = metadata.tables.get("operation_assignment_acks")
+
+    if existing_table is not None:
+        return existing_table
+
+    return Table(
+        "operation_assignment_acks",
+        metadata,
+        Column("operation_id", String(80), nullable=False),
+        Column("username", String(80), nullable=False),
+        Column(
+            "acknowledged_at",
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+        ),
+        PrimaryKeyConstraint("operation_id", "username"),
+    )
+
+
 def create_operation_status_events_table() -> Table:
     existing_table = metadata.tables.get("operation_status_events")
 

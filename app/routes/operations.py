@@ -185,3 +185,39 @@ async def get_operation_audit(
     await require_base_access(current_user, operation["base_id"], domain_repository)
     messages = await message_repository.get_channel_messages(operation["channel_id"])
     return await domain_repository.get_operation_audit(operation_id, messages)
+
+
+@router.get("/{operation_id}/assignment-ack")
+async def get_assignment_ack(
+    operation_id: str,
+    current_user: dict = Depends(get_current_user),
+    domain_repository=Depends(get_domain_repository),
+):
+    operation = await domain_repository.get_operation(operation_id)
+    if operation is None:
+        raise HTTPException(status_code=404, detail="Operacao nao encontrada")
+    await require_base_access(current_user, operation["base_id"], domain_repository)
+    acknowledged = await domain_repository.is_assignment_acknowledged(
+        operation_id,
+        current_user["username"],
+    )
+    return {"operation_id": operation_id, "acknowledged": acknowledged}
+
+
+@router.post("/{operation_id}/assignment-ack")
+async def acknowledge_assignment(
+    operation_id: str,
+    current_user: dict = Depends(get_current_user),
+    domain_repository=Depends(get_domain_repository),
+):
+    operation = await domain_repository.get_operation(operation_id)
+    if operation is None:
+        raise HTTPException(status_code=404, detail="Operacao nao encontrada")
+    await require_base_access(current_user, operation["base_id"], domain_repository)
+    acknowledged = await domain_repository.acknowledge_assignment(
+        operation_id,
+        current_user["username"],
+    )
+    if not acknowledged:
+        raise HTTPException(status_code=404, detail="Operacao nao encontrada")
+    return {"operation_id": operation_id, "acknowledged": True}

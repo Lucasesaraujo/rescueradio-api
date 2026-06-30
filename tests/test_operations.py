@@ -207,3 +207,40 @@ def test_notification_websocket_receives_assignment_event():
             event = websocket.receive_json()
             assert event["type"] == "OPERATION_ASSIGNED"
             assert event["operation_id"] == created.json()["id"]
+
+
+def test_operator_assignment_acknowledgement_persists_server_side():
+    app = create_app(udp_host="127.0.0.1", udp_port=0, disconnect_grace_seconds=0)
+
+    with TestClient(app) as client:
+        admin_token = register_login(client, "admin", "Admin")
+        operator_token = register_login(client, "op", "Operador")
+        client.put("/profiles/me", json=profile_payload(), headers=auth(operator_token))
+
+        created = client.post(
+            "/operations",
+            json={"occurrence": occurrence_payload(), "member_usernames": ["op"]},
+            headers=auth(admin_token),
+        )
+        operation_id = created.json()["id"]
+
+        before = client.get(
+            f"/operations/{operation_id}/assignment-ack",
+            headers=auth(operator_token),
+        )
+        assert before.status_code == 200
+        assert before.json()["acknowledged"] is False
+
+        ack = client.post(
+            f"/operations/{operation_id}/assignment-ack",
+            headers=auth(operator_token),
+        )
+        assert ack.status_code == 200
+        assert ack.json()["acknowledged"] is True
+
+        after = client.get(
+            f"/operations/{operation_id}/assignment-ack",
+            headers=auth(operator_token),
+        )
+        assert after.status_code == 200
+        assert after.json()["acknowledged"] is True

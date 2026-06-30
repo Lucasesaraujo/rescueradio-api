@@ -57,6 +57,12 @@ class OperationRepository(Protocol):
     async def get_operation_audit(self, operation_id: str, messages: list[dict]) -> dict | None:
         ...
 
+    async def acknowledge_assignment(self, operation_id: str, username: str) -> bool:
+        ...
+
+    async def is_assignment_acknowledged(self, operation_id: str, username: str) -> bool:
+        ...
+
 
 class InMemoryOperationRepository:
     def __init__(self, occurrence_repository: InMemoryOccurrenceRepository):
@@ -64,6 +70,7 @@ class InMemoryOperationRepository:
         self.operations: dict[str, dict] = {}
         self.members: dict[str, dict[str, dict]] = {}
         self.status_events: dict[str, list[dict]] = {}
+        self.assignment_acks: set[tuple[str, str]] = set()
         self.lock = asyncio.Lock()
 
     async def init_schema(self):
@@ -206,6 +213,17 @@ class InMemoryOperationRepository:
             events = list(self.status_events.get(operation_id, []))
         return {"operation": operation, "messages": messages, "status_events": events}
 
+    async def acknowledge_assignment(self, operation_id: str, username: str) -> bool:
+        async with self.lock:
+            if operation_id not in self.operations:
+                return False
+            self.assignment_acks.add((operation_id, username))
+            return True
+
+    async def is_assignment_acknowledged(self, operation_id: str, username: str) -> bool:
+        async with self.lock:
+            return (operation_id, username) in self.assignment_acks
+
     def _copy_operation(self, operation: dict) -> dict:
         copied = dict(operation)
         if copied.get("status") == "closed" and not copied.get("outcome"):
@@ -218,6 +236,7 @@ class PostgresOperationRepository:
     def __init__(self, engine: AsyncEngine):
         from app.infra.db.tables import (
             create_occurrences_table,
+            create_operation_assignment_acks_table,
             create_operation_members_table,
             create_operation_status_events_table,
             create_operations_table,
@@ -226,6 +245,7 @@ class PostgresOperationRepository:
         self.engine = engine
         self.operations = create_operations_table()
         self.members = create_operation_members_table()
+        self.assignment_acks = create_operation_assignment_acks_table()
         self.status_events = create_operation_status_events_table()
         self.occurrences = create_occurrences_table()
 
@@ -393,6 +413,38 @@ class PostgresOperationRepository:
             )
             events = [row_to_dict(row) for row in result.mappings().all()]
         return {"operation": operation, "messages": messages, "status_events": events}
+
+    async def acknowledge_assignment(self, operation_id: str, username: str) -> bool:
+        from sqlalchemy.dialects.postgresql import insert
+
+        if await self.get_operation(operation_id) is None:
+            return False
+
+        async with self.engine.begin() as connection:
+            statement = insert(self.assignment_acks).values(
+                operation_id=operation_id,
+                username=username,
+            )
+            statement = statement.on_conflict_do_nothing(
+                index_elements=[
+                    self.assignment_acks.c.operation_id,
+                    self.assignment_acks.c.username,
+                ],
+            )
+            await connection.execute(statement)
+        return True
+
+    async def is_assignment_acknowledged(self, operation_id: str, username: str) -> bool:
+        from sqlalchemy import select
+
+        async with self.engine.connect() as connection:
+            result = await connection.execute(
+                select(self.assignment_acks.c.operation_id).where(
+                    self.assignment_acks.c.operation_id == operation_id,
+                    self.assignment_acks.c.username == username,
+                )
+            )
+            return result.first() is not None
 
     async def _get_operation_row(self, operation_id: str) -> dict | None:
         async with self.engine.connect() as connection:

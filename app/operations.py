@@ -103,6 +103,12 @@ class DomainRepository(Protocol):
     async def get_operation_audit(self, operation_id: str, messages: list[dict]) -> dict | None:
         ...
 
+    async def acknowledge_assignment(self, operation_id: str, username: str) -> bool:
+        ...
+
+    async def is_assignment_acknowledged(self, operation_id: str, username: str) -> bool:
+        ...
+
 
 class InMemoryDomainRepository:
     def __init__(self):
@@ -207,6 +213,12 @@ class InMemoryDomainRepository:
 
     async def get_operation_audit(self, operation_id: str, messages: list[dict]) -> dict | None:
         return await self._operations.get_operation_audit(operation_id, messages)
+
+    async def acknowledge_assignment(self, operation_id: str, username: str) -> bool:
+        return await self._operations.acknowledge_assignment(operation_id, username)
+
+    async def is_assignment_acknowledged(self, operation_id: str, username: str) -> bool:
+        return await self._operations.is_assignment_acknowledged(operation_id, username)
 
 
 class PostgresDomainRepository:
@@ -313,3 +325,9 @@ class PostgresDomainRepository:
 
     async def get_operation_audit(self, operation_id: str, messages: list[dict]) -> dict | None:
         return await self._operations.get_operation_audit(operation_id, messages)
+
+    async def acknowledge_assignment(self, operation_id: str, username: str) -> bool:
+        return await self._operations.acknowledge_assignment(operation_id, username)
+
+    async def is_assignment_acknowledged(self, operation_id: str, username: str) -> bool:
+        return await self._operations.is_assignment_acknowledged(operation_id, username)
